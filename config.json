@@ -1,0 +1,18 @@
+{
+  "minecraft": {
+    "host": "mc.minerua.com",
+    "port": 25565,
+    "username": "dangluc206",
+    "version": "1.21.1",
+    "auth": "offline"
+  },
+  "discord": {
+    "token": "MTUyNTgxNzQyNjA3ODU5NzIzMA.G0j_7z.xyizW5p-YqKrW3JdSw6DdLARKaIuTp3JezOerI",
+    "ownerId": "1515066202916131009"
+  },
+  "blocks": {
+    "mine": [
+      "stone"
+    ]
+  }
+}
