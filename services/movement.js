@@ -1,7 +1,15 @@
+/**
+ * ===========================================
+ * Service: Movement
+ * Purpose: Handle bot movement
+ * ===========================================
+ */
+
 const { goals } = require("mineflayer-pathfinder");
 
-let goal = null;
 let moving = false;
+let finished = false;
+let goal = null;
 
 function start(bot, position) {
 
@@ -14,6 +22,7 @@ function start(bot, position) {
     );
 
     moving = true;
+    finished = false;
 
     bot.pathfinder.setGoal(goal);
 
@@ -23,25 +32,34 @@ function update(bot) {
 
     if (!moving) return;
 
-    if (bot.pathfinder.isMoving()) return;
+    if (bot.pathfinder.isMoving()) {
+        return;
+    }
 
     moving = false;
+    finished = true;
 
 }
 
 function isFinished() {
 
-    return !moving;
+    return finished;
+
+}
+
+function reset() {
+
+    moving = false;
+    finished = false;
+    goal = null;
 
 }
 
 function stop(bot) {
 
-    moving = false;
-
-    goal = null;
-
     bot.pathfinder.setGoal(null);
+
+    reset();
 
 }
 
@@ -52,6 +70,8 @@ module.exports = {
     update,
 
     isFinished,
+
+    reset,
 
     stop
 

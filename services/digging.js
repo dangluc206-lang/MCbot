@@ -1,3 +1,10 @@
+/**
+ * ===========================================
+ * Service: Digging
+ * Purpose: Handle block digging
+ * ===========================================
+ */
+
 let digging = false;
 let finished = false;
 
@@ -28,6 +35,10 @@ function start(bot, block) {
 
 }
 
+function update() {
+    // Không cần xử lý mỗi tick,
+    // giữ để thống nhất interface.
+}
 
 function isFinished() {
 
@@ -35,25 +46,24 @@ function isFinished() {
 
 }
 
-
 function reset() {
-
-    finished = false;
-
-}
-
-
-function stop() {
 
     digging = false;
     finished = false;
 
 }
 
+function stop() {
+
+    reset();
+
+}
 
 module.exports = {
 
     start,
+
+    update,
 
     isFinished,
 
