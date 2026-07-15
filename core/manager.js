@@ -1,43 +1,52 @@
+/**
+ * ===========================================
+ * Manager
+ * Purpose: Manage current task
+ * ===========================================
+ */
+
 class TaskManager {
+
     constructor() {
+
         this.task = null;
-        this.state = "IDLE";
+
         this.running = false;
+
     }
 
-   start(task) {
+    start(task) {
 
-    if (this.running) return false;
+        if (this.running) return false;
 
-    this.task = task;
-    this.state = "START";
-    this.running = true;
+        this.task = task;
 
-    return true;
+        this.running = true;
 
-}
+        return true;
+
+    }
 
     stop() {
+
         this.task = null;
-        this.state = "IDLE";
+
         this.running = false;
-    }
 
-    setState(state) {
-        this.state = state;
-    }
-
-    getState() {
-        return this.state;
     }
 
     getTask() {
+
         return this.task;
+
     }
 
     isRunning() {
+
         return this.running;
+
     }
+
 }
 
 module.exports = new TaskManager();
