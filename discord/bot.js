@@ -41,6 +41,6 @@ module.exports = (bot) => {
 
         command.execute(message, bot);
     });
-
+console.log("Discord token:", config.discord.token);
     client.login(config.discord.token);
 };

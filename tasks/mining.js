@@ -1,9 +1,26 @@
-const States = require("../core/states");
+/**
+ * ===========================================
+ * Task: Mining
+ * ===========================================
+ */
 
-const vision = require("../services/vision");
-const movement = require("../services/movement");
-const digging = require("../services/digging");
+const gotoMine = require("../services/gotoMine");
+const tool = require("../services/tool");
+const look = require("../services/look");
+const holdMining = require("../services/holdMining");
 const inventory = require("../services/inventory");
+
+const State = {
+
+    GOTO: 0,
+    EQUIP: 1,
+    LOOK: 2,
+    MINE: 3
+
+};
+
+let state = State.GOTO;
+let arrived = false;
 
 module.exports = {
 
@@ -11,107 +28,88 @@ module.exports = {
 
         console.log("⛏️ Mining Started");
 
-        context.targetBlock = null;
-
-        context.manager.setState(States.START);
+        state = State.GOTO;
+        arrived = false;
 
     },
 
-    update(context) {
+    async update(context) {
 
-        switch (context.manager.getState()) {
+        switch (state) {
 
-            case States.START:
+            case State.GOTO:
 
-                context.manager.setState(States.SEARCH);
+                if (!arrived) {
+
+                    arrived = true;
+
+                    await gotoMine.start(
+
+                        context.bot,
+                        context.config.mine
+
+                    );
+
+                }
+
+                state = State.EQUIP;
 
                 break;
 
-            case States.SEARCH: {
 
-                if (context.targetBlock) break;
 
-                const block = vision.findNearest(
+            case State.EQUIP:
+
+                if (!await tool.equip(
                     context.bot,
-                    context.config.blocks.mine
-                );
+                    "pickaxe"
+                )) {
 
-                if (!block) {
-
-                    console.log("❌ Không tìm thấy block");
+                    console.log("❌ Không có pickaxe");
 
                     context.manager.stop();
 
-                    break;
+                    return;
 
                 }
 
-                context.targetBlock = block;
-
-                console.log(
-                    `🪨 Found: ${block.name} (${block.position.x}, ${block.position.y}, ${block.position.z})`
-                );
-
-                context.manager.setState(States.MOVE);
-
-                break;
-            }
-
-            case States.MOVE:
-
-                if (!movement.isFinished()) break;
-
-                movement.start(
-                    context.bot,
-                    context.targetBlock.position
-                );
-
-                console.log("🚶 Moving...");
-
-                context.manager.setState(States.ACTION);
+                state = State.LOOK;
 
                 break;
 
-            case States.ACTION:
 
-                if (!digging.isFinished()) {
 
-                    digging.start(
-                        context.bot,
-                        context.targetBlock
+            case State.LOOK:
+
+                await look.lookStraight(
+                    context.bot
+                );
+
+                state = State.MINE;
+
+                break;
+
+
+
+            case State.MINE:
+
+                if (!holdMining.isMining()) {
+
+                    holdMining.start(
+                        context.bot
                     );
 
-                    break;
-
                 }
-
-                console.log(
-                    `✅ Đã đào: ${context.targetBlock.name}`
-                );
-
-                digging.reset();
 
                 if (inventory.isFull(context.bot)) {
 
-                    console.log("🎒 Túi đầy, dừng Mining.");
+                    holdMining.stop(
+                        context.bot
+                    );
 
-                    context.targetBlock = null;
-
-                    context.manager.stop();
-
-                    break;
+                    context.manager.start("sell");
 
                 }
-
-                context.targetBlock = null;
-
-                context.manager.setState(States.SEARCH);
-
-                break;
-
-            case States.FINISH:
-
-                context.manager.stop();
 
                 break;
 
@@ -121,11 +119,13 @@ module.exports = {
 
     stop(context) {
 
-        context.targetBlock = null;
+        holdMining.stop(
+            context.bot
+        );
 
-        movement.stop(context.bot);
+        state = State.GOTO;
 
-        digging.stop();
+        arrived = false;
 
         console.log("🛑 Mining Stopped");
 
