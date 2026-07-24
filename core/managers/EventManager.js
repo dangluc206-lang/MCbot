@@ -179,8 +179,9 @@ class EventManager extends BaseManager {
                 this._bus.removeListener(event, handler);
 
                 reject(
-                    new Error(
-                        `Timeout waiting for event "${event}".`
+                    new TimeoutError(
+                        `Event ${event}`,
+                        timeout
                     )
                 );
             }, timeout);

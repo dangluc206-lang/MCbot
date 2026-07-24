@@ -1,6 +1,7 @@
 'use strict';
 
 const Result = require('../constants/Result');
+const States = require('../constants/States');
 
 /**
  * ============================================================================
@@ -29,14 +30,14 @@ class Engine {
 
         this.logger = ctx.logger;
 
-        this.modeManager = ctx.modeManager;
+        this.modeManager = ctx.getManager('mode');
 
-        this.watchdogManager = ctx.watchdogManager;
-
-        this.recoveryManager = ctx.recoveryManager;
-
-        this.scheduler = ctx.scheduler;
-
+        this.watchdogManager = ctx.getManager('watchdog');
+        
+        this.recoveryManager = ctx.getManager('recovery');
+        
+        this.scheduler = ctx.getManager('scheduler');
+        
         this.running = false;
 
         /**
@@ -55,12 +56,13 @@ class Engine {
     async start() {
 
         if (this.running) {
-            return Result.ALREADY_RUNNING;
+            return Result.ENGINE_ALREADY_RUNNING;
         }
 
         this.running = true;
 
         this.runtime.engine.running = true;
+        this.runtime.state.engine.state = States.Engine.RUNNING;
 
         this.logger.success('Engine started.');
 
@@ -85,8 +87,7 @@ class Engine {
 
             }
 
-            await this.scheduler.delay(
-                'engine:tick',
+            await this.scheduler.sleep(
                 this.tickInterval
             );
 
@@ -106,6 +107,8 @@ class Engine {
         this.running = false;
 
         this.runtime.engine.running = false;
+
+        this.runtime.state.engine.state = States.Engine.STOPPED;
 
         this.scheduler.cancel('engine:tick');
 

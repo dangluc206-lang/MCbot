@@ -53,7 +53,13 @@ class Runtime {
      * - Test
      */
     reset() {
-        this._state = createRuntime();
+        const fresh = createRuntime();
+
+        Object.keys(this._state).forEach(key => {
+            delete this._state[key];
+        });
+
+        Object.assign(this._state, fresh);
     }
 
     /**

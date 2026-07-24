@@ -56,8 +56,13 @@ function createRuntime() {
             health: 20,
             food: 20,
             experience: 0,
+            level: 0,
 
             position: null,
+            rotation: null,
+            yaw: 0,
+            pitch: 0,
+
 
             dead: false,
 
@@ -81,7 +86,9 @@ function createRuntime() {
             opened: false,
             title: null,
             window: null,
-            slots: []
+            slots: [],
+            clickedSlot: null,
+            lastUpdate: null
         },
 
         /**
@@ -90,7 +97,9 @@ function createRuntime() {
         inventory: {
             items: [],
             emptySlots: 36,
-            full: false
+            full: false,
+            selectedSlot: 0,
+            heldItem: null
         },
 
         /**
@@ -110,7 +119,14 @@ function createRuntime() {
 
         watchdog: {
             enabled: true,
-            lastTick: 0
+
+            lastTick: 0,
+
+            state: States.Watchdog.HEALTHY,
+
+            lastHeartbeat: null,
+
+            recovering: false
         },
         /**
          * Collector Runtime
@@ -159,17 +175,6 @@ function createRuntime() {
             state: States.Mining.IDLE,
 
             holding: null
-        },
-
-        /**
-         * Watchdog Runtime
-         */
-        watchdog: {
-            state: States.Watchdog.HEALTHY,
-
-            lastHeartbeat: null,
-
-            recovering: false
         },
 
         /**

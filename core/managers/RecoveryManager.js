@@ -92,9 +92,15 @@ class RecoveryManager extends BaseManager {
         try {
 
             const modeManager = this.manager('mode');
+            const skyblock = this.service('skyblock');
+
+            if (skyblock) {
+
+                await skyblock.ensureJoined();
+            }
 
             if (modeManager) {
-                await this.ctx.skyblock.ensureJoined();
+                
                 await modeManager.recover();
             }
 
@@ -103,8 +109,9 @@ class RecoveryManager extends BaseManager {
             this.state.recovery.lastRecovery = Date.now();
 
             return Result.SUCCESS;
+        
 
-        }
+        } 
         catch (error) {
 
             this.error(error);

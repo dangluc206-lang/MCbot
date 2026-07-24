@@ -124,7 +124,15 @@ class Context {
      * @returns {Context}
      */
     registerManager(name, manager) {
+        if (this.managers[name]) {
+            throw new Error(
+                `Manager "${name}" already registered.`
+            );
+        }
         this.managers[name] = manager;
+
+        this[name] = manager;
+
         return this;
     }
 
@@ -146,6 +154,11 @@ class Context {
      * @returns {Context}
      */
     registerService(name, service) {
+        if (this.services[name]) {
+            throw new Error(
+                `Service "${name}" already registered.`
+            );
+        }
         this.services[name] = service;
 
         /**
@@ -178,6 +191,11 @@ class Context {
      * @returns {Context}
      */
     registerMode(name, mode) {
+        if (this.modes[name]) {
+            throw new Error(
+                `Mode "${name}" already registered.`
+            );
+        }
         this.modes[name] = mode;
         return this;
     }
@@ -200,6 +218,11 @@ class Context {
      * @returns {Context}
      */
     registerWatchdog(name, watchdog) {
+        if (this.watchdogs[name]) {
+            throw new Error(
+                `Watchdog "${name}" already registered.`
+            );
+        }
         this.watchdogs[name] = watchdog;
         return this;
     }

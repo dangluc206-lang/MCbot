@@ -87,7 +87,10 @@ class BotError extends Error {
             recoverable: this.recoverable,
             data: this.data,
             timestamp: this.timestamp,
-            stack: this.stack
+            stack: 
+            process.env.NODE_ENV === 'development'
+                ? this.stack
+                : undefined
         };
     }
 

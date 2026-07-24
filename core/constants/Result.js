@@ -205,7 +205,9 @@ const Result = Object.freeze({
     /**
      * Framework đang bận.
      */
-    BUSY: 'BUSY'
+    BUSY: 'BUSY',
+    ENGINE_ALREADY_RUNNING: 'ENGINE_ALREADY_RUNNING',
+    ENGINE_NOT_RUNNING: 'ENGINE_NOT_RUNNING',
 });
 
 module.exports = Object.freeze(Result);

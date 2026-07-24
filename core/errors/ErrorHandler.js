@@ -54,7 +54,7 @@ class ErrorHandler {
 
         if (error instanceof Error) {
             return new BotError(error.message, {
-                code: error.name || 'UNEXPECTED_ERROR',
+                code: error.code || error.name || 'UNEXPECTED_ERROR',
                 recoverable: false,
                 cause: error
             });

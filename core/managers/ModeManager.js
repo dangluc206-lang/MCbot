@@ -83,6 +83,12 @@ class ModeManager extends BaseManager {
      * @returns {ModeManager}
      */
     register(name, mode) {
+        if (this.modes.has(name)) {
+            throw new Error(
+                `Mode "${name}" already registered.`
+            );
+        }
+        
         this.modes.set(name, mode);
         this.ctx.registerMode(name, mode);
 
