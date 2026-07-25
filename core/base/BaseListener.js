@@ -111,6 +111,20 @@ class BaseListener {
         this.registered = true;
         return Result.SUCCESS;
     }
+    /**
+     * Khởi tạo Listener.
+     *
+     * @returns {Promise<String>}
+     */
+    async initialize() {
+
+        if (this.registered) {
+            return Result.NO_ACTION;
+        }
+
+        return this.register();
+
+    }
 
     /**
      * Hủy đăng ký listener.
@@ -129,7 +143,20 @@ class BaseListener {
 
         return Result.SUCCESS;
     }
+     /**
+     * Hủy Listener.
+     *
+     * @returns {Promise<String>}
+     */
+    async destroy() {
 
+        if (!this.registered) {
+            return Result.NO_ACTION;
+        }
+
+        return this.unregister();
+
+    }
     /**
      * Bind event và tự lưu để unregister.
      *

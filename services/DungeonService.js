@@ -1,9 +1,9 @@
 'use strict';
 
-const BaseService = require('../base/BaseService');
-const Result = require('../constants/Result');
-const States = require('../constants/States');
-const Events = require('../constants/Events');
+const BaseService = require('../core/base/BaseService');
+const Result = require('../core/constants/Result');
+const States = require('../core/constants/States');
+const Events = require('../core/constants/Events');
 
 /**
  * ============================================================================

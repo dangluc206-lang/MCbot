@@ -1,7 +1,7 @@
 'use strict';
 
-const BaseMode = require('../base/BaseMode');
-const Result = require('../constants/Result');
+const BaseMode = require('../core/base/BaseMode');
+const Result = require('../core/constants/Result');
 
 /**
  * ============================================================================

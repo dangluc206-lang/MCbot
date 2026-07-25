@@ -32,11 +32,6 @@ module.exports = function registerManagers(ctx) {
     );
 
     ctx.registerManager(
-        'events',
-        new EventManager(ctx)
-    );
-
-    ctx.registerManager(
         'scheduler',
         new SchedulerManager(ctx)
     );

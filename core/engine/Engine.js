@@ -28,6 +28,8 @@ class Engine {
 
         this.runtime = ctx.runtime;
 
+        this._loop = null;
+
         this.logger = ctx.logger;
 
         this.modeManager = ctx.getManager('mode');
@@ -55,35 +57,31 @@ class Engine {
      */
     async start() {
 
-        if (this.running) {
-            return Result.ENGINE_ALREADY_RUNNING;
+        if (this.state.engine.running) {
+            return Result.NO_ACTION;
         }
 
-        this.running = true;
+        this.state.engine.running = true;
 
-        this.runtime.engine.running = true;
-        this.runtime.state.engine.state = States.Engine.RUNNING;
+        this.success('Engine started.');
 
-        this.logger.success('Engine started.');
+        this._loop = this.run();
 
-        while (this.running) {
+        return Result.SUCCESS;
+
+    }
+
+    async run() {
+
+        while (this.state.engine.running) {
 
             try {
 
-                this.runtime.engine.tick++;
+                await this.tick();
 
-                await this.modeManager.tick();
+            } catch (error) {
 
-                await this.watchdogManager.tick();
-
-                await this.recoveryManager.tick();
-
-            }
-            catch (error) {
-
-                this.ctx.errorHandle(error, {
-                    tick: this.runtime.state.engine.tick
-                });
+                this.logger.error(error);
 
             }
 
@@ -92,8 +90,6 @@ class Engine {
             );
 
         }
-
-        return Result.SUCCESS;
 
     }
 
@@ -106,7 +102,7 @@ class Engine {
 
         this.running = false;
 
-        this.runtime.engine.running = false;
+        this.runtime.state.engine.running = false;
 
         this.runtime.state.engine.state = States.Engine.STOPPED;
 

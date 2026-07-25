@@ -1,9 +1,9 @@
 'use strict';
 
-const BaseService = require('../base/BaseService');
-const Result = require('../constants/Result');
-const Events = require('../constants/Events');
-const TimeoutError = require('../errors/TimeoutError');
+const BaseService = require('../core/base/BaseService');
+const Result = require('../core/constants/Result');
+const Events = require('../core/constants/Events');
+const TimeoutError = require('../core/errors/TimeoutError');
 
 /**
  * ============================================================================

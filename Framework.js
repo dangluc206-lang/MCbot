@@ -115,6 +115,8 @@ class Framework {
 
         return Result.SUCCESS;
 
+        this.runtime.reset();
+
     }
 
 }

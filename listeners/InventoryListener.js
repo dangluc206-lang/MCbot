@@ -1,8 +1,8 @@
 'use strict';
 
-const BaseListener = require('../base/BaseListener');
-const Result = require('../constants/Result');
-const Events = require('../constants/Events');
+const BaseListener = require('../core/base/BaseListener');
+const Result = require('../core/constants/Result');
+const Events = require('../core/constants/Events');
 
 /**
  * ============================================================================

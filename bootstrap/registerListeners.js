@@ -7,7 +7,7 @@ const {
     GUIListener,
     ChatListener,
     MovementListener,
-    SkyBlockListener
+    
 } = require('../listeners');
 
 /**
@@ -36,7 +36,7 @@ module.exports = async function registerListeners(ctx) {
 
         new MovementListener(ctx),
 
-        new SkyBlockListener(ctx)
+        
 
     ];
 
