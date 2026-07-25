@@ -3,19 +3,6 @@
 const BaseMode = require('../base/BaseMode');
 const Result = require('../constants/Result');
 
-/**
- * ============================================================================
- * CollectorMode
- * ============================================================================
- *
- * Điều phối workflow Collector.
- *
- * Không thao tác Mineflayer.
- * Chỉ gọi Service.
- *
- * ============================================================================
- */
-
 class CollectorMode extends BaseMode {
 
     constructor(ctx) {
@@ -24,9 +11,16 @@ class CollectorMode extends BaseMode {
         this.name = 'CollectorMode';
     }
 
+    /**
+     * Khởi động Collector.
+     */
     async start() {
 
-        await super.start();
+        const result = await super.start();
+
+        if (result !== Result.SUCCESS) {
+            return result;
+        }
 
         await this.service('skyblock').ensureJoined();
 
@@ -34,32 +28,37 @@ class CollectorMode extends BaseMode {
 
     }
 
-    async stop() {
-
-        await this.service('movement').stop();
-
-        return super.stop();
-
-    }
-
+    /**
+     * Tick chính.
+     */
     async tick() {
 
-        const inventory = this.service('inventory');
+        // luôn đảm bảo đang ở SkyBlock
+        await this.service('skyblock').ensureJoined();
 
-        if (inventory.isFull()) {
+        // chết -> yêu cầu Recovery
+        if (this.service('player').isDead()) {
+            this.requestRecovery('PLAYER_DEAD');
+            return Result.PLAYER_DEAD;
+        }
+
+        // inventory đầy -> bán
+        if (this.service('inventory').isFull()) {
 
             await this.service('storage').sellAll();
 
             return Result.SUCCESS;
-
         }
 
+        // thu thập
         await this.service('collector').collect();
 
         return Result.SUCCESS;
-
     }
 
+    /**
+     * Recovery.
+     */
     async recover() {
 
         await this.service('skyblock').ensureJoined();
@@ -71,6 +70,19 @@ class CollectorMode extends BaseMode {
         this.clearRecovery();
 
         return Result.SUCCESS;
+
+    }
+
+    /**
+     * Dừng Collector.
+     */
+    async stop() {
+
+        await this.service('collector').stop();
+
+        await this.service('movement').stop();
+
+        return super.stop();
 
     }
 

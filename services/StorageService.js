@@ -157,7 +157,15 @@ class StorageService extends BaseService {
         return Result.SUCCESS;
 
     }
+    async sellAll() {
 
+        await this.sellInventory();
+
+        await this.sellStorage();
+
+        return Result.SUCCESS;
+
+    }
 
     /**
      * Kiểm tra có item cần bán.
