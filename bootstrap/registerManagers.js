@@ -16,9 +16,19 @@ const {
  */
 module.exports = function registerManagers(ctx) {
 
+      // Logger trước
+    const logger = new LoggerManager(ctx);
+
+    ctx.setLogger(logger);
     ctx.registerManager(
-        'logger',
-        new LoggerManager(ctx)
+        `logger`,
+        logger
+    );
+
+    // Các manager còn lại
+    ctx.registerManager(
+        'events',
+        new EventManager(ctx)
     );
 
     ctx.registerManager(

@@ -177,10 +177,13 @@ class EventManager extends BaseManager {
 
             timer = setTimeout(() => {
                 this._bus.removeListener(event, handler);
+                
+                const TimeoutError =
+                require('../errors/TimeoutError');
 
                 reject(
                     new TimeoutError(
-                        `Event ${event}`,
+                        Event,
                         timeout
                     )
                 );

@@ -81,9 +81,9 @@ class Engine {
             }
             catch (error) {
 
-                this.runtime.engine.lastError = error;
-
-                this.logger.error(error);
+                this.ctx.errorHandle(error, {
+                    tick: this.runtime.state.engine.tick
+                });
 
             }
 
