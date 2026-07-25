@@ -112,10 +112,10 @@ class Framework {
         for (const manager of Object.values(this.ctx.managers).reverse()) {
             await manager.destroy();
         }
-
+        this.runtime.reset();
         return Result.SUCCESS;
 
-        this.runtime.reset();
+
 
     }
 

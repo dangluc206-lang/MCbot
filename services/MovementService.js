@@ -4,6 +4,7 @@ const BaseService = require('../core/base/BaseService');
 const Result = require('../core/constants/Result');
 const Events = require('../core/constants/Events');
 const TimeoutError = require('../core/errors/TimeoutError');
+const { goals: { GoalNear } } = require('mineflayer-pathfinder');
 
 /**
  * ============================================================================
@@ -174,6 +175,14 @@ class MovementService extends BaseService {
             this.emit(
                 Events.Movement.START,
                 position
+            );
+            this.pathfinder.setGoal(
+                new GoalNear(
+                    position.x,
+                    position.y,
+                    position.z,
+                    1
+                )
             );
 
 

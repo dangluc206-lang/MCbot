@@ -42,11 +42,20 @@ class DungeonMode extends BaseMode {
             return result;
         }
 
-        await this.service('skyblock').ensureJoined();
+       const skyblock = this.service('skyblock');
+        const dungeon = this.service('dungeon');
 
-        await this.service('dungeon').enter();
+        const joined = await skyblock.ensureJoined();
+        if (joined !== Result.SUCCESS && joined !== Result.ALREADY_DONE) {
+            return joined;
+        }
 
-        return Result.SUCCESS;
+        const started = await dungeon.start();
+        if (started !== Result.SUCCESS && started !== Result.ALREADY_DONE) {
+            return started;
+        }
+
+        return dungeon.enter();
     }
 
     /**
@@ -56,14 +65,14 @@ class DungeonMode extends BaseMode {
      */
     async tick() {
 
-        await this.service('skyblock').ensureJoined();
+        const joined = await this.service('skyblock').ensureJoined();
+        if (joined !== Result.SUCCESS && joined !== Result.ALREADY_DONE) {
+            return joined;
+        }
 
         if (this.service('player').isDead()) {
-
             this.requestRecovery('PLAYER_DEAD');
-
             return Result.PLAYER_DEAD;
-
         }
 
         return Result.SUCCESS;
@@ -76,13 +85,24 @@ class DungeonMode extends BaseMode {
      */
     async recover() {
 
-        await this.service('skyblock').ensureJoined();
+        const dungeon = this.service('dungeon');
+
+        const joined = await this.service('skyblock').ensureJoined();
+        if (joined !== Result.SUCCESS && joined !== Result.ALREADY_DONE) {
+            return joined;
+        }
 
         await this.service('movement').stop();
 
-        await this.service('dungeon').respawn();
+        if (!dungeon.isRunning()) {
+            const started = await dungeon.start();
+            if (started !== Result.SUCCESS && started !== Result.ALREADY_DONE) {
+                return started;
+            }
+        }
 
-        await this.service('dungeon').resume();
+        await dungeon.respawn();
+        await dungeon.resume();
 
         this.clearRecovery();
 
@@ -96,11 +116,10 @@ class DungeonMode extends BaseMode {
      */
     async stop() {
 
-        await this.service('dungeon').stop();
-
         await this.service('movement').stop();
-
         await this.service('dungeon').exit();
+        await this.service('dungeon').stop();
+        
 
         return super.stop();
     }

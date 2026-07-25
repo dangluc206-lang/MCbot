@@ -130,11 +130,13 @@ class ModeManager extends BaseManager {
             return Result.MODE_ALREADY_RUNNING;
         }
 
-        if (this.currentMode) {
+        
+        const previousMode = this.currentMode;
+        if (previousMode) {
             await this.stop();
         }
 
-        this.previousMode = this.currentMode;
+        this.previousMode = previousMode;
         this.currentMode = mode;
 
         this.state.mode.previous = this.previousMode

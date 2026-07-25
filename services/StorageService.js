@@ -158,13 +158,13 @@ class StorageService extends BaseService {
 
     }
     async sellAll() {
+        const inv = await this.sellInventory();
+        if (inv !== Result.SUCCESS) return inv;
 
-        await this.sellInventory();
-
-        await this.sellStorage();
+        const storage = await this.sellStorage();
+        if (storage !== Result.SUCCESS) return storage;
 
         return Result.SUCCESS;
-
     }
 
     /**

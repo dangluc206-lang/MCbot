@@ -183,7 +183,7 @@ class EventManager extends BaseManager {
 
                 reject(
                     new TimeoutError(
-                        Event,
+                        event,
                         timeout
                     )
                 );
