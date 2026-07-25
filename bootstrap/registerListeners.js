@@ -44,7 +44,7 @@ module.exports = async function registerListeners(ctx) {
 
     for (const listener of listeners) {
 
-        await listener.initialize();
+        await listener.register();
 
     }
 

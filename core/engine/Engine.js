@@ -42,7 +42,6 @@ class Engine {
         
         this.scheduler = ctx.getManager('scheduler');
         
-        this.running = false;
 
         /**
          * Tick interval (ms).
