@@ -28,6 +28,8 @@ class Engine {
 
         this.runtime = ctx.runtime;
 
+        this.state = this.runtime.state;
+
         this._loop = null;
 
         this.logger = ctx.logger;
@@ -63,7 +65,7 @@ class Engine {
 
         this.state.engine.running = true;
 
-        this.success('Engine started.');
+        this.logger.success('Engine started.');
 
         this._loop = this.run();
 
@@ -92,6 +94,30 @@ class Engine {
         }
 
     }
+    /**
+     * Thực hiện một Engine Tick.
+     *
+     * @returns {Promise<String>}
+     */
+    async tick() {
+
+        this.state.engine.tick++;
+
+        if (this.watchdogManager?.tick) {
+            await this.watchdogManager.tick();
+        }
+
+        if (this.recoveryManager?.tick) {
+            await this.recoveryManager.tick();
+        }
+
+        if (this.modeManager?.tick) {
+            await this.modeManager.tick();
+        }
+
+        return Result.SUCCESS;
+
+    }
 
     /**
      * Dừng Engine.
@@ -100,13 +126,14 @@ class Engine {
      */
     async stop() {
 
-        this.running = false;
+        this.state.engine.running = false;
 
-        this.runtime.state.engine.running = false;
-
-        this.runtime.state.engine.state = States.Engine.STOPPED;
+        this.state.engine.state = States.Engine.STOPPED;
 
         this.scheduler.cancel('engine:tick');
+        if (this._loop) {
+            await this._loop;
+        }
 
         this.logger.warn('Engine stopped.');
 
@@ -120,7 +147,7 @@ class Engine {
      * @returns {Boolean}
      */
     isRunning() {
-        return this.running;
+        return this.state.engine.running;
     }
 
 }

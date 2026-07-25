@@ -50,13 +50,7 @@ class FakeBot {
 
     console.log('Framework started.');
 
-    await new Promise(resolve => setTimeout(resolve, 200));
-
-    console.log('========== STOP ==========');
-
-    await framework.start();
-
-setTimeout(async () => {
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
     console.log('========== STOP ==========');
 
@@ -65,9 +59,5 @@ setTimeout(async () => {
     console.log('Framework stopped.');
 
     process.exit(0);
-
-}, 3000);
-
-    console.log('Framework stopped.');
 
 })();
