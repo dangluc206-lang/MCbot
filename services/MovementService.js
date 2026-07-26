@@ -4,8 +4,8 @@ const BaseService = require('../core/base/BaseService');
 const Result = require('../core/constants/Result');
 const Events = require('../core/constants/Events');
 const TimeoutError = require('../core/errors/TimeoutError');
-const { goals: { GoalNear } } = require('mineflayer-pathfinder');
-
+const { goals: { GoalNear, GoalFollow } } = require('mineflayer-pathfinder');
+const { Vec3 } = require('vec3');
 /**
  * ============================================================================
  * MovementService
@@ -30,6 +30,7 @@ class MovementService extends BaseService {
 
     constructor(ctx) {
         super(ctx);
+        this.scheduler = ctx.getManager('scheduler');
 
         this.name = 'MovementService';
 
@@ -135,7 +136,29 @@ class MovementService extends BaseService {
         });
 
     }
+    preparePathfinder() {
 
+        if (!this.bot?.pathfinder) {
+            return false;
+        }
+
+        if (this._movementPrepared) {
+            return true;
+        }
+ 
+        const mcData = require('minecraft-data')(this.bot.version);
+
+        this.bot.pathfinder.setMovements(
+            new (require('mineflayer-pathfinder').Movements)(
+                this.bot,
+                mcData
+            )
+        );
+
+        this._movementPrepared = true;
+
+        return true;
+    }
 
     /**
      * Di chuyển tới vị trí.
@@ -176,6 +199,12 @@ class MovementService extends BaseService {
                 Events.Movement.START,
                 position
             );
+            this.preparePathfinder();
+            this.pathfinder =
+                this.bot.pathfinder;
+            if(!this.pathfinder) {
+                return Result.NO_PATH;
+            }
             this.pathfinder.setGoal(
                 new GoalNear(
                     position.x,
