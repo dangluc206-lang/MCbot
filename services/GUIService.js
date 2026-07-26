@@ -54,8 +54,6 @@ class GUIService extends BaseService {
 
         await super.initialize();
 
-        this.bindEvents();
-
         return Result.SUCCESS;
 
     }

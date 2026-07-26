@@ -55,10 +55,9 @@ class WatchdogManager extends BaseManager {
 
         // Mất kết nối
         if (!this.state.bot.connected) {
-
-            this.manager('recovery').request('DISCONNECTED');
-
-            return Result.SUCCESS;
+            return this.state.connection.lastDisconnect
+                ? Result.DISCONNECTED
+                : Result.NO_ACTION;
         }
 
         // Chết

@@ -3,106 +3,93 @@
 const Context = require('./core/context/Context');
 const Runtime = require('./core/runtime/Runtime');
 const Engine = require('./core/engine/Engine');
+const ErrorHandler = require('./core/errors/ErrorHandler');
+const Result = require('./core/constants/Result');
 
 const registerManagers = require('./bootstrap/registerManagers');
 const registerServices = require('./bootstrap/registerServices');
 const registerListeners = require('./bootstrap/registerListeners');
 const registerModes = require('./bootstrap/registerModes');
 
-const Result = require('./core/constants/Result');
-
-/**
- * ============================================================================
- * Framework
- * ============================================================================
- *
- * Entry của toàn bộ Framework.
- *
- * Trách nhiệm:
- * - Khởi tạo Context.
- * - Khởi tạo Runtime.
- * - Đăng ký Manager.
- * - Đăng ký Service.
- * - Đăng ký Listener.
- * - Đăng ký Mode.
- * - Điều phối Engine.
- *
- * ============================================================================
- */
-
 class Framework {
-
-    /**
-     * @param {*} bot
-     * @param {Object} config
-     */
     constructor(bot, config = {}) {
+        this.bot = bot;
+        this.config = config;
+        this.ctx = null;
+        this.runtime = null;
+        this.engine = null;
+        this.started = false;
+        this.stopped = false;
 
+        this.createContext();
+    }
+
+    createContext() {
         this.ctx = new Context();
-
         this.runtime = new Runtime();
 
         this.ctx
-            .setBot(bot)
-            .setConfig(config)
+            .setBot(this.bot)
+            .setConfig(this.config)
             .setRuntime(this.runtime);
-
-        this.engine = null;
-
     }
 
-    /**
-     * Khởi động Framework.
-     *
-     * @returns {Promise<String>}
-     */
     async start() {
-
-        // Managers
-        registerManagers(this.ctx);
-
-        for (const manager of Object.values(this.ctx.managers)) {
-            await manager.initialize();
+        if (this.started) {
+            return Result.NO_ACTION;
         }
 
-        // Services
-        registerServices(this.ctx);
-
-        for (const service of Object.values(this.ctx.services)) {
-            await service.initialize();
+        if (this.stopped) {
+            this.createContext();
+            this.stopped = false;
         }
 
-        // Listeners
-        await registerListeners(this.ctx);
+        try {
+            registerManagers(this.ctx);
 
-        // Modes
-        registerModes(this.ctx);
+            for (const manager of Object.values(this.ctx.managers)) {
+                await manager.initialize();
+            }
 
-        this.runtime.state.startedAt = Date.now();
+            this.ctx.setErrorHandler(new ErrorHandler(this.ctx));
 
-        this.engine = new Engine(this.ctx);
+            registerServices(this.ctx);
 
-        return this.engine.start();
+            for (const service of Object.values(this.ctx.services)) {
+                await service.initialize();
+            }
 
+            await registerListeners(this.ctx);
+            registerModes(this.ctx);
+
+            this.runtime.state.startedAt = Date.now();
+            this.engine = new Engine(this.ctx);
+
+            const result = await this.engine.start();
+            this.started = result === Result.SUCCESS;
+
+            return result;
+        }
+        catch (error) {
+            this.ctx.errorHandler?.handle(error, { phase: 'framework.start' });
+            await this.stop();
+            return Result.FAILED;
+        }
     }
 
-    /**
-     * Dừng Framework.
-     *
-     * @returns {Promise<String>}
-     */
     async stop() {
+        if (!this.started) {
+            return Result.NO_ACTION;
+        }
 
         if (this.engine) {
             await this.engine.stop();
         }
 
         if (Array.isArray(this.ctx.listeners)) {
-
             for (const listener of [...this.ctx.listeners].reverse()) {
                 await listener.destroy();
             }
-
         }
 
         for (const service of Object.values(this.ctx.services).reverse()) {
@@ -112,13 +99,14 @@ class Framework {
         for (const manager of Object.values(this.ctx.managers).reverse()) {
             await manager.destroy();
         }
+
         this.runtime.reset();
+        this.engine = null;
+        this.started = false;
+        this.stopped = true;
+
         return Result.SUCCESS;
-
-
-
     }
-
 }
 
 module.exports = Framework;

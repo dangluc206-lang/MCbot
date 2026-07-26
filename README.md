@@ -1,5 +1,19 @@
 # Mineflayer Automation Framework
 
+## Chạy dự án
+
+1. Sao chép `config/config.example.json` thành `config/config.json` và điền thông tin Minecraft.
+2. Sao chép `.env.example` thành `.env`, sau đó đặt `DISCORD_TOKEN` và `DISCORD_OWNER_ID` nếu muốn bật Discord.
+3. Chạy `npm start`.
+
+`config/config.json` và `.env` là cấu hình cục bộ, không đưa lên Git. Discord chỉ nhận lệnh từ `DISCORD_OWNER_ID`:
+
+- `!status`
+- `!start collector` hoặc `!start dungeon`
+- `!stop`, `!pause`, `!resume`
+
+Kiểm tra framework bằng `npm test` hoặc `npm run smoke`.
+
 ## Giới thiệu
 
 Mineflayer Automation Framework là một framework được xây dựng bằng **Node.js** dựa trên thư viện **Mineflayer**, hướng tới việc tự động hóa các hoạt động trong máy chủ Minecraft SkyBlock.

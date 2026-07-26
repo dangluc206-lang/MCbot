@@ -77,6 +77,7 @@ class BaseService {
          * @protected
          */
         this.initialized = false;
+        this._bindings = [];
     }
 
     /**
@@ -99,8 +100,22 @@ class BaseService {
      * @returns {Promise<String>}
      */
     async destroy() {
+        this.unbindAll();
         this.initialized = false;
         return Result.SUCCESS;
+    }
+
+    bind(emitter, event, handler) {
+        emitter.on(event, handler);
+        this._bindings.push({ emitter, event, handler });
+    }
+
+    unbindAll() {
+        for (const binding of this._bindings) {
+            binding.emitter.removeListener(binding.event, binding.handler);
+        }
+
+        this._bindings.length = 0;
     }
 
     /**

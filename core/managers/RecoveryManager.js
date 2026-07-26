@@ -94,14 +94,26 @@ class RecoveryManager extends BaseManager {
             const modeManager = this.manager('mode');
             const skyblock = this.service('skyblock');
 
+            if (!this.state.bot.connected) {
+                return Result.NOT_CONNECTED;
+            }
+
             if (skyblock) {
 
-                await skyblock.ensureJoined();
+                const joined = await skyblock.ensureJoined();
+
+                if (joined !== Result.SUCCESS && joined !== Result.ALREADY_DONE) {
+                    return joined;
+                }
             }
 
             if (modeManager) {
                 
-                await modeManager.recover();
+                const recovered = await modeManager.recover();
+
+                if (recovered !== Result.SUCCESS && recovered !== Result.NO_ACTION) {
+                    return recovered;
+                }
             }
 
             this.state.recovery.required = false;

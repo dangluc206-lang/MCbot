@@ -45,8 +45,6 @@ class PlayerService extends BaseService {
 
         await super.initialize();
 
-        this.bindEvents();
-
         return Result.SUCCESS;
     }
 

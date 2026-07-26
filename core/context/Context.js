@@ -43,6 +43,8 @@ class Context {
          */
         this.logger = null;
 
+        this.errorHandler = null;
+
         /**
          * ==========================
          * Managers
@@ -113,6 +115,11 @@ class Context {
      */
     setLogger(logger) {
         this.logger = logger;
+        return this;
+    }
+
+    setErrorHandler(errorHandler) {
+        this.errorHandler = errorHandler;
         return this;
     }
 

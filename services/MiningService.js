@@ -66,7 +66,7 @@ class MiningService extends BaseService {
         }
 
 
-        this.bot.on('diggingCompleted', block => {
+        this.bind(this.bot, 'diggingCompleted', block => {
 
             this.currentBlock = null;
 

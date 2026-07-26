@@ -104,7 +104,7 @@ class MovementService extends BaseService {
         }
 
 
-        this.bot.on('goal_reached', () => {
+        this.bind(this.bot, 'goal_reached', () => {
 
             this.moving = false;
 
@@ -120,7 +120,7 @@ class MovementService extends BaseService {
         });
 
 
-        this.bot.on('path_update', result => {
+        this.bind(this.bot, 'path_update', result => {
 
             if (
                 result &&

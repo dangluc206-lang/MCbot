@@ -33,6 +33,7 @@ class Engine {
         this._loop = null;
 
         this.logger = ctx.logger;
+        this.errorHandler = ctx.errorHandler;
 
         this.modeManager = ctx.getManager('mode');
 
@@ -63,6 +64,7 @@ class Engine {
         }
 
         this.state.engine.running = true;
+        this.state.engine.state = States.Engine.RUNNING;
 
         this.logger.success('Engine started.');
 
@@ -82,7 +84,7 @@ class Engine {
 
             } catch (error) {
 
-                this.logger.error(error);
+                this.errorHandler?.handle(error, { phase: 'engine.tick' });
 
             }
 
@@ -129,7 +131,6 @@ class Engine {
 
         this.state.engine.state = States.Engine.STOPPED;
 
-        this.scheduler.cancel('engine:tick');
         if (this._loop) {
             await this._loop;
         }

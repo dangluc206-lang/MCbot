@@ -76,7 +76,15 @@ function createRuntime() {
             loggedIn: false,
             joined: false,
             resourcePackAccepted: false,
-            lastLogin: 0
+            lastLogin: 0,
+            workflow: {
+                step: 'IDLE',
+                status: 'idle',
+                message: 'Chưa bắt đầu vào SkyBlock.',
+                startedAt: null,
+                updatedAt: null,
+                error: null
+            }
         },
 
         /**

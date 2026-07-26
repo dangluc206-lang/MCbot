@@ -75,7 +75,7 @@ class DungeonMode extends BaseMode {
             return Result.PLAYER_DEAD;
         }
 
-        return Result.SUCCESS;
+        return this.service('dungeon').tick();
     }
 
     /**

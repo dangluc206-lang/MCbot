@@ -69,7 +69,8 @@ class CollectorService extends BaseService {
         }
 
 
-        this.events.on(
+        this.bind(
+            this.events,
             Events.Inventory.FULL,
             () => {
 
@@ -83,6 +84,16 @@ class CollectorService extends BaseService {
 
             }
         );
+
+        if (this.bot) {
+            this.bind(this.bot, 'playerCollect', (collector, item) => {
+                if (collector !== this.bot.entity) {
+                    return;
+                }
+
+                this.collect(item);
+            });
+        }
 
     }
 
@@ -102,8 +113,7 @@ class CollectorService extends BaseService {
 
 
         this.running = true;
-
-
+        this.state.collector.paused = false;
         this.state.collector.running = true;
 
         this.state.collector.state =
@@ -135,8 +145,7 @@ class CollectorService extends BaseService {
 
 
         this.running = false;
-
-
+        this.state.collector.paused = false;
         this.state.collector.running = false;
 
         this.state.collector.state =

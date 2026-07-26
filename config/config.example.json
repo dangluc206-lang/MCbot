@@ -1,0 +1,38 @@
+{
+  "minecraft": {
+    "host": "your-server.example",
+    "port": 25565,
+    "username": "bot-account-name",
+    "version": "1.21.1",
+    "auth": "offline"
+  },
+  "discord": {
+    "ownerId": "your-discord-user-id"
+  },
+  "skyblock": {
+    "loginPassword": "",
+    "serverSlot": 12,
+    "islandSlot": 19,
+    "afterSpawnDelayMs": 1000,
+    "afterLoginDelayMs": 1500,
+    "afterGuiOpenDelayMs": 500,
+    "islandClickAttempts": 3,
+    "loginTimeoutMs": 15000,
+    "guiTimeoutMs": 10000,
+    "joinTimeoutMs": 15000
+  },
+  "dungeon": {
+    "command": "/d",
+    "entrySlot": 12,
+    "teleportDelayMs": 5000,
+    "eatHealthBelow": 12,
+    "eatFoodBelow": 12,
+    "attackRange": 3.2,
+    "attackIntervalMs": 600
+  },
+  "storage": {
+    "mine": ["coal_ore", "iron_ore"]
+  },
+  "mine": { "x": 0, "y": 64, "z": 0 },
+  "shop": { "x": 0, "y": 64, "z": 0 }
+}

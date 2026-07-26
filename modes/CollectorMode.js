@@ -22,9 +22,14 @@ class CollectorMode extends BaseMode {
             return result;
         }
 
-        await this.service('skyblock').ensureJoined();
+        const joined = await this.service('skyblock').ensureJoined();
 
-        return Result.SUCCESS;
+        if (joined !== Result.SUCCESS && joined !== Result.ALREADY_DONE) {
+            await super.stop();
+            return joined;
+        }
+
+        return this.service('collector').start();
 
     }
 
@@ -34,7 +39,11 @@ class CollectorMode extends BaseMode {
     async tick() {
 
         // luôn đảm bảo đang ở SkyBlock
-        await this.service('skyblock').ensureJoined();
+        const joined = await this.service('skyblock').ensureJoined();
+
+        if (joined !== Result.SUCCESS && joined !== Result.ALREADY_DONE) {
+            return joined;
+        }
 
         // chết -> yêu cầu Recovery
         if (this.service('player').isDead()) {
@@ -51,9 +60,7 @@ class CollectorMode extends BaseMode {
         }
 
         // thu thập
-        await this.service('collector').collect();
-
-        return Result.SUCCESS;
+        return this.service('collector').tick();
     }
 
     /**
