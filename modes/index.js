@@ -2,5 +2,6 @@
 
 module.exports = {
     CollectorMode: require('./CollectorMode'),
-    DungeonMode: require('./DungeonMode')
+    DungeonMode: require('./DungeonMode'),
+    FishingMode: require('./FishingMode')
 };

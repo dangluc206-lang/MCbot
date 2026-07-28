@@ -64,6 +64,7 @@ class Framework {
 
             this.runtime.state.startedAt = Date.now();
             this.engine = new Engine(this.ctx);
+            this.ctx.engine = this.engine;
 
             const result = await this.engine.start();
             this.started = result === Result.SUCCESS;
@@ -102,6 +103,7 @@ class Framework {
 
         this.runtime.reset();
         this.engine = null;
+        this.ctx.engine = null;
         this.started = false;
         this.stopped = true;
 

@@ -1,0 +1,30 @@
+'use strict';
+
+module.exports = Object.freeze({
+    DASHBOARD_REFRESH: 'dashboard:refresh',
+    MODE_START: 'mode:start',
+    MODE_STOP: 'mode:stop',
+    MODE_PAUSE: 'mode:pause',
+    MODE_RESUME: 'mode:resume',
+    MOVEMENT_STOP: 'movement:stop',
+    SHUTDOWN_CONFIRM: 'shutdown:confirm',
+    SHUTDOWN_CANCEL: 'shutdown:cancel',
+    PANEL_CONNECT: 'panel:connect',
+    PANEL_REFRESH: 'panel:refresh',
+    PANEL_JOIN_12: 'panel:join:12',
+    PANEL_JOIN_14: 'panel:join:14',
+    PANEL_ISLAND: 'panel:island',
+    PANEL_COLLECTOR: 'panel:mode:collector',
+    PANEL_DUNGEON: 'panel:mode:dungeon',
+    PANEL_FISHING: 'panel:mode:fishing',
+    PANEL_STOP: 'panel:mode:stop',
+    PANEL_PAUSE: 'panel:mode:pause',
+    PANEL_RESUME: 'panel:mode:resume',
+    PANEL_ORES: 'panel:ores',
+    CONFIG_SKYBLOCK: 'config:skyblock',
+    CONFIG_DUNGEON: 'config:dungeon',
+    CONFIG_FISHING: 'config:fishing',
+    CONFIG_ORES: 'config:ores',
+    CONFIG_COORDS: 'config:coords',
+    CONFIG_COORDS_MODAL: 'config:coords:modal'
+});

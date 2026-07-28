@@ -2,6 +2,7 @@
 
 const BaseManager = require('../base/BaseManager');
 const Result = require('../constants/Result');
+const Events = require('../constants/Events');
 
 /**
  * ============================================================================
@@ -145,7 +146,9 @@ class ModeManager extends BaseManager {
 
         this.state.mode.current = mode.name;
 
-        return mode.start();
+        const result = await mode.start();
+        if (result === Result.SUCCESS) this.ctx.getManager('events')?.emit(Events.Mode.START, name);
+        return result;
     }
 
     /**
@@ -166,6 +169,8 @@ class ModeManager extends BaseManager {
         this.state.mode.previous = this.previousMode.name;
         this.state.mode.current = null;
 
+        if (result === Result.SUCCESS) this.ctx.getManager('events')?.emit(Events.Mode.STOP, this.previousMode.name);
+
         return result;
     }
 
@@ -179,7 +184,9 @@ class ModeManager extends BaseManager {
             return Result.MODE_NOT_RUNNING;
         }
 
-        return this.currentMode.pause();
+        const result = await this.currentMode.pause();
+        if (result === Result.SUCCESS) this.ctx.getManager('events')?.emit(Events.Mode.PAUSE, this.currentMode.name);
+        return result;
     }
 
     /**
@@ -192,7 +199,9 @@ class ModeManager extends BaseManager {
             return Result.MODE_NOT_RUNNING;
         }
 
-        return this.currentMode.resume();
+        const result = await this.currentMode.resume();
+        if (result === Result.SUCCESS) this.ctx.getManager('events')?.emit(Events.Mode.RESUME, this.currentMode.name);
+        return result;
     }
 
     /**

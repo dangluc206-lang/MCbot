@@ -2,7 +2,8 @@
 
 const {
     CollectorMode,
-    DungeonMode
+    DungeonMode,
+    FishingMode
 } = require('../modes');
 
 /**
@@ -27,6 +28,11 @@ module.exports = function registerModes(ctx) {
     modeManager.register(
         'dungeon',
         new DungeonMode(ctx)
+    );
+
+    modeManager.register(
+        'fishing',
+        new FishingMode(ctx)
     );
 
 };

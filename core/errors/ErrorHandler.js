@@ -91,13 +91,13 @@ class ErrorHandler {
 
         // Ghi log
         if (this.logger?.error) {
-            this.logger.error(
-                `[${botError.code}] ${botError.message}`,
-                {
-                    context,
-                    stack: botError.stack
-                }
-            );
+            const message = `[${botError.code}] ${botError.message}`;
+            if (this.ctx.config.logging?.includeStack) {
+                this.logger.error(message, { context, stack: botError.stack });
+            }
+            else {
+                this.logger.error(message);
+            }
         }
 
         // Phát sự kiện nội bộ

@@ -77,6 +77,7 @@ function createRuntime() {
             joined: false,
             resourcePackAccepted: false,
             lastLogin: 0,
+            islandReady: false,
             workflow: {
                 step: 'IDLE',
                 status: 'idle',
@@ -174,6 +175,11 @@ function createRuntime() {
             deaths: 0,
 
             waitingRespawn: false
+        },
+
+        fishing: {
+            state: 'IDLE',
+            running: false
         },
 
         /**

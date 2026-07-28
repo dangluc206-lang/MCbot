@@ -101,9 +101,12 @@ class InventoryService extends BaseService {
         this.state.inventory.items =
             items.map(item => ({
                 name: item.name,
+                displayName: item.displayName || item.name,
                 type: item.type,
                 count: item.count,
-                slot: item.slot
+                slot: item.slot,
+                durabilityUsed: item.durabilityUsed ?? null,
+                maxDurability: item.maxDurability ?? null
             }));
 
 
@@ -262,6 +265,43 @@ class InventoryService extends BaseService {
             count: this.bot.heldItem.count
         };
 
+    }
+
+    itemAt(slot) {
+        if (!Number.isInteger(slot) || slot < 0) return null;
+        return this.bot?.inventory?.slots?.[slot] || null;
+    }
+
+    async use(slot) {
+        const item = this.itemAt(slot);
+        if (!item || !this.bot?.activateItem) return Result.ITEM_NOT_FOUND;
+        await this.bot.equip(item, 'hand');
+        this.bot.activateItem();
+        return Result.SUCCESS;
+    }
+
+    async equip(slot, destination) {
+        const valid = new Set(['hand', 'off-hand', 'head', 'torso', 'legs', 'feet']);
+        const item = this.itemAt(slot);
+        if (!valid.has(destination) || !item || !this.bot?.equip) return Result.ITEM_NOT_FOUND;
+        await this.bot.equip(item, destination);
+        return Result.SUCCESS;
+    }
+
+    async drop(slot, amount = 1) {
+        const item = this.itemAt(slot);
+        const count = Number(amount);
+        if (!item || !Number.isInteger(count) || count < 1 || count > item.count || !this.bot?.toss) return Result.ITEM_NOT_FOUND;
+        await this.bot.toss(item.type, item.metadata ?? null, count);
+        return Result.SUCCESS;
+    }
+
+    async swap(from, to) {
+        if (!this.itemAt(from) || !Number.isInteger(to) || to < 0 || !this.bot?.clickWindow) return Result.ITEM_NOT_FOUND;
+        await this.bot.clickWindow(from, 0, 0);
+        await this.bot.clickWindow(to, 0, 0);
+        await this.bot.clickWindow(from, 0, 0);
+        return Result.SUCCESS;
     }
 
 

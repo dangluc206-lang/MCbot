@@ -28,6 +28,10 @@ class FakeBot extends EventEmitter {
     async clickWindow(slot) {
         this.clickedSlots.push(slot);
     }
+
+    closeWindow() {
+        this.emit('windowClose');
+    }
 }
 
 async function waitFor(predicate, timeout = 250) {
@@ -51,7 +55,7 @@ test('framework can restart after a clean shutdown', async () => {
 
 test('inventory update emits once per Mineflayer event', async () => {
     const bot = new FakeBot();
-    const framework = new Framework(bot, {});
+    const framework = new Framework(bot, { skyblock: { islandTeleportDelayMs: 0 } });
     await framework.start();
 
     let received = 0;
@@ -64,7 +68,7 @@ test('inventory update emits once per Mineflayer event', async () => {
 
 test('collector mode records only bot collection events', async () => {
     const bot = new FakeBot();
-    const framework = new Framework(bot, {});
+    const framework = new Framework(bot, { skyblock: { islandTeleportDelayMs: 0 } });
     await framework.start();
 
     framework.runtime.state.bot.connected = true;
@@ -87,6 +91,7 @@ test('SkyBlock workflow reports each GUI step and waits for confirmation', async
             afterSpawnDelayMs: 0,
             afterGuiOpenDelayMs: 0,
             islandClickAttempts: 1,
+            islandTeleportDelayMs: 0,
             guiTimeoutMs: 100,
             joinTimeoutMs: 100
         }
@@ -117,7 +122,7 @@ test('SkyBlock workflow reports each GUI step and waits for confirmation', async
 test('SkyBlock workflow confirms a server teleport without relying on chat text', async () => {
     const bot = new FakeBot();
     const framework = new Framework(bot, {
-        skyblock: { afterSpawnDelayMs: 0, afterGuiOpenDelayMs: 0, islandClickAttempts: 1, guiTimeoutMs: 100, joinTimeoutMs: 100 }
+        skyblock: { afterSpawnDelayMs: 0, afterGuiOpenDelayMs: 0, islandClickAttempts: 1, islandTeleportDelayMs: 0, guiTimeoutMs: 100, joinTimeoutMs: 100 }
     });
     await framework.start();
     framework.runtime.state.bot.connected = true;
@@ -136,10 +141,11 @@ test('SkyBlock workflow confirms a server teleport without relying on chat text'
     await framework.stop();
 });
 
-test('dungeon mode sends /d and clicks its fixed entry slot', async () => {
+test('dungeon mode enables AutoFarm before entering through /d', async () => {
     const bot = new FakeBot();
     const framework = new Framework(bot, {
-        dungeon: { teleportDelayMs: 0, guiTimeoutMs: 100, entrySlot: 12 }
+        skyblock: { islandTeleportDelayMs: 0 },
+        dungeon: { teleportDelayMs: 0, autofarmMenuDelayMs: 0, autofarmCloseDelayMs: 0, guiTimeoutMs: 100, entrySlot: 12, autofarmSlot: 21 }
     });
     await framework.start();
     framework.runtime.state.bot.connected = true;
@@ -147,11 +153,20 @@ test('dungeon mode sends /d and clicks its fixed entry slot', async () => {
     framework.runtime.state.skyblock.joined = true;
 
     const starting = framework.ctx.getManager('mode').start('dungeon');
+    await waitFor(() => bot.chatMessages.includes('/autofarm'));
+    const autofarmSlots = Array(54);
+    autofarmSlots[21] = { type: 1, id: 1, name: 'stone' };
+    bot.emit('windowOpen', { title: 'AutoFarm', slots: autofarmSlots });
+    await waitFor(() => bot.clickedSlots.includes(21));
     await waitFor(() => bot.chatMessages.includes('/d'));
-    bot.emit('windowOpen', { title: 'Dungeon', slots: [] });
+    const dungeonSlots = Array(54);
+    dungeonSlots[12] = { type: 1, id: 1, name: 'stone' };
+    bot.emit('windowOpen', { title: 'Dungeon', slots: dungeonSlots });
+    await waitFor(() => bot.clickedSlots.includes(12));
 
     assert.equal(await starting, Result.SUCCESS);
     assert.ok(bot.clickedSlots.includes(12));
+    assert.ok(bot.clickedSlots.includes(21));
     assert.equal(framework.runtime.state.dungeon.state, 'RUNNING');
     await framework.stop();
 });

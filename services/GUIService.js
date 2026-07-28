@@ -266,7 +266,9 @@ class GUIService extends BaseService {
         }
 
 
-        this.bot.closeWindow();
+        // Mineflayer requires the concrete window object; gọi không có đối số
+        // sẽ làm nó truy cập `undefined.id`.
+        this.bot.closeWindow(this.window());
 
 
         return Result.SUCCESS;

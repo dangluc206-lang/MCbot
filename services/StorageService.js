@@ -54,6 +54,11 @@ class StorageService extends BaseService {
 
         await super.initialize();
 
+        const configured = this.config.storage?.selectedOres
+            || this.config.storage?.mine
+            || [];
+        this.setSelectedOres(configured);
+
         return Result.SUCCESS;
 
     }
@@ -195,8 +200,10 @@ class StorageService extends BaseService {
      */
     setSelectedOres(ores = []) {
 
-        this.state.storage.selectedOres =
-            ores;
+        const unique = [...new Set(ores.filter(ore => typeof ore === 'string' && ore))];
+        this.state.storage.selectedOres = unique;
+        this.config.storage = this.config.storage || {};
+        this.config.storage.selectedOres = [...unique];
 
 
         return Result.SUCCESS;

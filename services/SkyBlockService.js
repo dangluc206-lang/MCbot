@@ -39,6 +39,7 @@ class SkyBlockService extends BaseService {
         this.loginTimeout = 15000;
         this.joinTimeout = 15000;
         this.workflowTask = null;
+        this.islandVisitTask = null;
         this.cancelled = false;
         this.postIslandDiagnostics = null;
     }
@@ -73,19 +74,16 @@ class SkyBlockService extends BaseService {
 
         this.bind(this.bot, 'resourcePack', () => this.acceptResourcePack());
         this.bind(this.bot, 'spawn', () => this.onSpawn());
-        this.bind(this.bot, 'kicked', reason => this.setWorkflow(
+        this.bind(this.bot, 'kicked', reason => this.connectionFailed(
             'CONNECTION_FAILED',
-            'failed',
-            `Bot bị kick: ${String(reason)}`
+            `Bot bị kick: ${this.formatServerReason(reason)}`
         ));
-        this.bind(this.bot, 'end', reason => this.setWorkflow(
+        this.bind(this.bot, 'end', reason => this.connectionFailed(
             'CONNECTION_ENDED',
-            'failed',
-            `Kết nối đã đóng: ${String(reason || 'unknown')}`
+            `Kết nối đã đóng: ${this.formatServerReason(reason || 'unknown')}`
         ));
-        this.bind(this.bot, 'error', error => this.setWorkflow(
+        this.bind(this.bot, 'error', error => this.connectionFailed(
             'CONNECTION_ERROR',
-            'failed',
             `Lỗi kết nối: ${error.message}`,
             error
         ));
@@ -119,6 +117,20 @@ class SkyBlockService extends BaseService {
         this[level](`[SkyBlock] ${step}: ${message}`);
     }
 
+    connectionFailed(step, message, error = null) {
+        this.cancelled = true;
+        this.state.skyblock.joined = false;
+        this.state.skyblock.loggedIn = false;
+        this.state.skyblock.islandReady = false;
+        this.setWorkflow(step, 'failed', message, error);
+    }
+
+    formatServerReason(reason) {
+        if (typeof reason === 'string') return reason;
+        if (reason?.toString && reason.toString() !== '[object Object]') return reason.toString();
+        return this.readText(reason) || JSON.stringify(reason);
+    }
+
     status() {
         return { ...this.state.skyblock.workflow, joined: this.state.skyblock.joined };
     }
@@ -146,7 +158,8 @@ class SkyBlockService extends BaseService {
             this.setWorkflow('WAIT_RESOURCE_PACK', 'complete', 'Resource Pack đã hoàn tất; bot đã spawn.');
         }
 
-        if (!this.state.skyblock.joined && !this.workflowTask) {
+        if (this.configForWorkflow().autoJoinOnSpawn === true &&
+            !this.state.skyblock.joined && !this.workflowTask) {
             this.startJoin('auto').catch(error => this.error(error));
         }
     }
@@ -197,7 +210,10 @@ class SkyBlockService extends BaseService {
         if (this.state.skyblock.joined) return;
 
         this.state.skyblock.joined = true;
+        this.state.skyblock.islandReady = false;
         this.setWorkflow('VERIFY_SKYBLOCK', 'complete', message);
+        this.islandVisitTask = this.goToIsland()
+            .finally(() => { this.islandVisitTask = null; });
         this.emit(Events.SkyBlock.JOINED);
     }
 
@@ -270,7 +286,7 @@ class SkyBlockService extends BaseService {
 
     }
 
-    async startJoin(source = 'manual') {
+    async startJoin(source = 'manual', overrides = {}) {
         if (this.state.skyblock.joined) {
             return Result.ALREADY_DONE;
         }
@@ -281,7 +297,7 @@ class SkyBlockService extends BaseService {
 
         this.cancelled = false;
         this.state.skyblock.workflow.startedAt = Date.now();
-        this.workflowTask = this.runJoinWorkflow(source)
+        this.workflowTask = this.runJoinWorkflow(source, overrides)
             .catch(error => {
                 this.setWorkflow(this.state.skyblock.workflow.step, 'failed', error.message, error);
                 return Result.FAILED;
@@ -291,8 +307,8 @@ class SkyBlockService extends BaseService {
         return Result.PENDING;
     }
 
-    async runJoinWorkflow(source) {
-        const settings = this.configForWorkflow();
+    async runJoinWorkflow(source, overrides = {}) {
+        const settings = { ...this.configForWorkflow(), ...overrides };
         const gui = this.service('gui');
         const password = settings.loginPassword || process.env.SKYBLOCK_LOGIN_PASSWORD;
 
@@ -310,7 +326,7 @@ class SkyBlockService extends BaseService {
             this.setWorkflow('WAIT_LOGIN', 'waiting', 'Đang chờ server xác nhận login thành công.');
             await this.waitForLoggedIn(settings.loginTimeoutMs ?? this.loginTimeout);
             this.setWorkflow('WAIT_LOGIN', 'complete', 'Server đã xác nhận login thành công.');
-            await this.delay(settings.afterLoginDelayMs ?? 1500);
+            await this.delay(settings.afterLoginDelayMs ?? 1000);
         } else {
             this.state.skyblock.loggedIn = true;
             this.setWorkflow('LOGIN', 'skipped', 'Không có SKYBLOCK_LOGIN_PASSWORD; bỏ qua /login.');
@@ -329,7 +345,7 @@ class SkyBlockService extends BaseService {
         this.setWorkflow('ISLAND_MENU_OPEN', 'complete', this.describeWindow(secondWindow, settings.islandSlot ?? 19));
 
         this.throwIfCancelled();
-        const guiDelay = settings.afterGuiOpenDelayMs ?? 500;
+        const guiDelay = settings.afterGuiOpenDelayMs ?? 1000;
         this.setWorkflow('WAIT_ISLAND_MENU_READY', 'waiting', `Chờ ${guiDelay} ms để menu đảo sẵn sàng.`);
         await this.delay(guiDelay);
         this.throwIfCancelled();
@@ -358,6 +374,7 @@ class SkyBlockService extends BaseService {
             if (attempt === attempts) return;
 
             await this.delay(1000);
+            this.throwIfCancelled();
             if (this.isJoined()) return;
             if (gui.window() !== window) {
                 this.info('[SkyBlock] Menu đảo đã thay đổi sau click; dừng click lặp.');
@@ -420,29 +437,42 @@ class SkyBlockService extends BaseService {
                     }
                 }, 250);
             };
+            const connectionHandler = reason => finishError(new Error(
+                `Mất kết nối khi chờ teleport: ${this.formatServerReason(reason || 'unknown')}`
+            ));
             const finish = result => {
                 clearTimeout(timer);
                 this.events.off(Events.SkyBlock.JOINED, joinedHandler);
                 this.bot.removeListener('forcedMove', teleportHandler);
                 this.bot.removeListener('scoreboardPosition', scoreboardHandler);
                 this.bot.removeListener('scoreboardTitleChanged', scoreboardHandler);
+                this.bot.removeListener('kicked', connectionHandler);
+                this.bot.removeListener('end', connectionHandler);
                 this.events.off(Events.GUI.CLOSE, closeHandler);
                 this.stopPostIslandDiagnostics();
                 resolve(result);
             };
-            const timer = setTimeout(() => {
+            const finishError = error => {
+                clearTimeout(timer);
                 this.events.off(Events.SkyBlock.JOINED, joinedHandler);
                 this.bot.removeListener('forcedMove', teleportHandler);
                 this.bot.removeListener('scoreboardPosition', scoreboardHandler);
                 this.bot.removeListener('scoreboardTitleChanged', scoreboardHandler);
+                this.bot.removeListener('kicked', connectionHandler);
+                this.bot.removeListener('end', connectionHandler);
                 this.events.off(Events.GUI.CLOSE, closeHandler);
                 this.stopPostIslandDiagnostics();
-                reject(new TimeoutError('SkyBlock teleport confirmation', timeout));
+                reject(error);
+            };
+            const timer = setTimeout(() => {
+                finishError(new TimeoutError('SkyBlock teleport confirmation', timeout));
             }, timeout);
             this.events.on(Events.SkyBlock.JOINED, joinedHandler);
             this.bot.once('forcedMove', teleportHandler);
             this.bot.on('scoreboardPosition', scoreboardHandler);
             this.bot.on('scoreboardTitleChanged', scoreboardHandler);
+            this.bot.once('kicked', connectionHandler);
+            this.bot.once('end', connectionHandler);
             this.events.on(Events.GUI.CLOSE, closeHandler);
             scoreboardHandler();
         });
@@ -585,6 +615,32 @@ class SkyBlockService extends BaseService {
 
         return this.join();
 
+    }
+
+    async goToIsland() {
+        if (!this.state.bot.connected || !this.isJoined()) {
+            return Result.NOT_IN_SKYBLOCK;
+        }
+
+        const settings = this.configForWorkflow();
+        const command = settings.islandCommand || '/is';
+        const delay = settings.islandTeleportDelayMs ?? 1000;
+
+        this.info(`[SkyBlock] Đang gửi ${command} sau khi vào SkyBlock.`);
+        this.bot.chat(command);
+        await this.delay(delay);
+        if (!this.state.bot.connected || !this.isJoined()) {
+            return Result.DISCONNECTED;
+        }
+        this.state.skyblock.islandReady = true;
+        this.info(`[SkyBlock] Đã chờ ${delay} ms cho teleport về đảo.`);
+
+        return Result.SUCCESS;
+    }
+
+    async waitForIsland() {
+        if (this.islandVisitTask) return this.islandVisitTask;
+        return this.state.skyblock.islandReady ? Result.SUCCESS : Result.SUCCESS;
     }
 
 

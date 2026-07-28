@@ -50,6 +50,12 @@ class DungeonMode extends BaseMode {
             return joined;
         }
 
+        const island = await skyblock.waitForIsland();
+        if (island !== Result.SUCCESS) {
+            await super.stop();
+            return island;
+        }
+
         const started = await dungeon.start();
         if (started !== Result.SUCCESS && started !== Result.ALREADY_DONE) {
             return started;
@@ -107,6 +113,18 @@ class DungeonMode extends BaseMode {
         this.clearRecovery();
 
         return Result.SUCCESS;
+    }
+
+    async pause() {
+        const result = await super.pause();
+        if (result !== Result.SUCCESS) return result;
+        return this.service('dungeon').pause();
+    }
+
+    async resume() {
+        const result = await this.service('dungeon').resume();
+        if (result !== Result.SUCCESS) return result;
+        return super.resume();
     }
 
     /**

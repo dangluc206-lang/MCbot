@@ -250,6 +250,39 @@ class PlayerService extends BaseService {
 
     }
 
+    /** Minecraft network latency when the server exposes it. */
+    ping() {
+        const ping = this.bot?.player?.ping ?? this.bot?.players?.[this.bot?.username]?.ping;
+        return Number.isFinite(ping) ? Math.round(ping) : null;
+    }
+
+    dimension() {
+        return this.bot?.game?.dimension || null;
+    }
+
+    effects() {
+        return Object.values(this.bot?.entity?.effects || {}).map(effect => ({
+            id: effect.id,
+            amplifier: effect.amplifier,
+            duration: effect.duration
+        }));
+    }
+
+    oxygen() {
+        const oxygen = this.bot?.oxygenLevel;
+        return Number.isFinite(oxygen) ? oxygen : null;
+    }
+
+    nearbyPlayers(range = 64) {
+        const origin = this.bot?.entity?.position;
+        if (!origin) return [];
+        return Object.entries(this.bot.players || {}).map(([username, player]) => ({ username, entity: player.entity }))
+            .filter(player => player.entity && player.username !== this.bot.username)
+            .map(player => ({ username: player.username, distance: origin.distanceTo(player.entity.position) }))
+            .filter(player => player.distance <= range)
+            .sort((a, b) => a.distance - b.distance);
+    }
+
 
     /**
      * Reset trạng thái death.

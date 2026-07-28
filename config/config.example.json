@@ -4,18 +4,48 @@
     "port": 25565,
     "username": "bot-account-name",
     "version": "1.21.1",
-    "auth": "offline"
+    "auth": "offline",
+    "reconnectDelayMs": 5000,
+    "reconnectMaxDelayMs": 60000
+  },
+  "serverReset": {
+    "timeZone": "Asia/Ho_Chi_Minh",
+    "hours": [3, 5],
+    "waitMinutes": 10,
+    "preWaitMinutes": 1
   },
   "discord": {
-    "ownerId": "your-discord-user-id"
+    "enabled": true,
+    "ownerId": "your-discord-user-id",
+    "ownerIds": "your-discord-user-id",
+    "controlChannelId": "",
+    "configChannelId": "",
+    "notificationChannelId": "",
+    "errorChannelId": "",
+    "defaultEphemeral": true,
+    "liveStatusIntervalMs": 5000
+  },
+  "logging": {
+    "level": "SUCCESS",
+    "includeStack": false,
+    "timeZone": "Asia/Ho_Chi_Minh"
+  },
+  "viewer": {
+    "enabled": true,
+    "port": 3000,
+    "viewDistance": 6,
+    "publicUrl": ""
   },
   "skyblock": {
+    "autoJoinOnSpawn": false,
     "loginPassword": "",
     "serverSlot": 12,
     "islandSlot": 19,
+    "islandCommand": "/is",
+    "islandTeleportDelayMs": 1000,
     "afterSpawnDelayMs": 1000,
-    "afterLoginDelayMs": 1500,
-    "afterGuiOpenDelayMs": 500,
+    "afterLoginDelayMs": 1000,
+    "afterGuiOpenDelayMs": 1000,
     "islandClickAttempts": 3,
     "loginTimeoutMs": 15000,
     "guiTimeoutMs": 10000,
@@ -25,13 +55,54 @@
     "command": "/d",
     "entrySlot": 12,
     "teleportDelayMs": 5000,
+    "autofarmCommand": "/autofarm",
+    "autofarmSlot": 21,
+    "autofarmMenuDelayMs": 1000,
+    "autofarmCloseDelayMs": 1000,
+    "slotReadyTimeoutMs": 3000,
+    "reentryDelayMs": 300000,
+    "spawnReentryDelayMs": 2000,
+    "spawnCheckDelayMs": 1000,
+    "spawnPatterns": ["spawn"],
+    "spawnPosition": null,
+    "spawnRadius": 8,
+    "storageCommand": "/pv 2",
     "eatHealthBelow": 12,
     "eatFoodBelow": 12,
+    "weaponItems": ["diamond_sword"],
     "attackRange": 3.2,
+    "targetSearchRange": 192,
     "attackIntervalMs": 600
   },
   "storage": {
-    "mine": ["coal_ore", "iron_ore"]
+    "mine": ["coal_ore", "iron_ore"],
+    "selectedOres": ["coal_ore", "iron_ore"],
+    "oreOptions": ["coal_ore", "iron_ore", "copper_ore", "gold_ore", "redstone_ore", "lapis_ore", "diamond_ore", "emerald_ore", "coal_block", "iron_block", "copper_block", "gold_block", "redstone_block", "lapis_block", "diamond_block", "emerald_block"]
+  },
+  "fishing": {
+    "command": "/afk",
+    "afkSlots": [11, 13, 15],
+    "slotTargets": {
+      "11": [74, 70, 90],
+      "13": [1, 64, 3],
+      "15": [1, 64, 3]
+    },
+    "guiTimeoutMs": 10000,
+    "afkMenuDelayMs": 1000,
+    "slotTeleportTimeoutMs": 5000,
+    "rodItems": ["fishing_rod"],
+    "targetReachDistance": 1,
+    "moveTimeoutMs": 90000,
+    "moveProgressTimeoutMs": 8000,
+    "moveLogIntervalMs": 3000,
+    "moveRetryCount": 2,
+    "directFallbackMaxDistance": 24,
+    "directFallbackTimeoutMs": 180000,
+    "directFallbackStuckMs": 2000,
+    "directFallbackUnstuckAttempts": 30,
+    "forceDirectSprintJump": true,
+    "jumpOverGroundBlocks": ["cyan_terracotta", "blue_terracotta"],
+    "avoidGroundBlocks": []
   },
   "mine": { "x": 0, "y": 64, "z": 0 },
   "shop": { "x": 0, "y": 64, "z": 0 }

@@ -1,12 +1,56 @@
 # Mineflayer Automation Framework
 
+## Discord Controller
+
+Discord là lớp điều khiển từ xa; command không gọi Mineflayer trực tiếp. Tất cả thao tác đi qua `Context`, `ModeManager` hoặc Service. Controller dùng slash command, permission ở server-side, cooldown, audit log, dashboard và notification event-driven.
+
+### Thiết lập Discord
+
+1. Tạo Discord Application, thêm Bot và bật **Server Members Intent** nếu bạn cấu hình quyền theo role.
+2. Mời bot với scope `bot` và `applications.commands`.
+3. Sao chép `.env.example` thành `.env`, điền `DISCORD_TOKEN`, `DISCORD_CLIENT_ID` và ít nhất `DISCORD_OWNER_IDS`.
+4. Chạy `npm run discord:register`. Có `DISCORD_GUILD_ID` thì command được đăng ký riêng cho guild development; bỏ biến này hoặc đặt `DISCORD_REGISTER_GLOBAL_COMMANDS=true` để đăng ký global.
+5. Chạy `npm start`, sau đó dùng `/help` hoặc `/status`.
+
+Không gửi `.env`, token Discord, mật khẩu Minecraft hoặc URL viewer riêng tư lên Discord. `viewer.publicUrl` chỉ được hiển thị khi là URL HTTPS công khai.
+
+### Quyền
+
+| Cấp | Quyền chính |
+| --- | --- |
+| VIEWER | ping, help, status, position, health, players, inventory |
+| MODERATOR | pause/resume, dừng di chuyển, logs |
+| ADMIN | chat, command, mode start/stop, goto, reconnect, restart |
+| OWNER | shutdown có bước xác nhận |
+
+### Lệnh hiện có
+
+`/ping`, `/help`, `/status`, `/panel`, `/start`, `/stop`, `/restart`, `/shutdown`, `/mode`, `/chat`, `/command`, `/position`, `/health`, `/players`, `/reconnect`, `/goto`, `/inventory`, `/logs`.
+
+Dashboard `/status` có nút làm mới, chạy/dừng/tạm dừng/tiếp tục mode. Inventory có phiên phân trang 2 phút và chỉ người tạo phiên mới điều khiển được.
+
+`/panel` là bảng điều khiển đầy đủ: kết nối Minecraft, chọn SkyBlock slot 12/14, về đảo, chạy Collector/Dungeon/Câu cá, quản lý mode và chọn ore/block được phép bán.
+
 ## Chạy dự án
 
 1. Sao chép `config/config.example.json` thành `config/config.json` và điền thông tin Minecraft.
 2. Sao chép `.env.example` thành `.env`, sau đó đặt `DISCORD_TOKEN` và `DISCORD_OWNER_ID` nếu muốn bật Discord.
 3. Chạy `npm start`.
 
-`config/config.json` và `.env` là cấu hình cục bộ, không đưa lên Git. Discord chỉ nhận lệnh từ `DISCORD_OWNER_ID`:
+`config/config.json` và `.env` là cấu hình cục bộ, không đưa lên Git. Discord chỉ nhận lệnh/tương tác từ `DISCORD_OWNER_ID`.
+
+Dùng slash command `/panel` trong Discord để mở bảng điều khiển bằng nút bấm, không cần chat lệnh Minecraft. Bảng có các nút: trạng thái, vào SkyBlock, về đảo `/is`, bật Dungeon, bật Collector, tạm dừng, tiếp tục và dừng mode.
+Nếu muốn bot tự gửi bảng này sau mỗi lần khởi động, đặt ID kênh Discord vào `discord.controlChannelId` trong `config/config.json`.
+
+Panel tự cập nhật máu, độ no và tọa độ mỗi 5 giây (đổi tại `discord.liveStatusIntervalMs`). Góc nhìn thứ nhất của bot chạy tại `http://localhost:3000` trên máy đang chạy bot. Để mở bằng nút trong Discord từ máy khác, tạo một URL HTTPS công khai trỏ tới cổng này rồi đặt URL đó vào `viewer.publicUrl`.
+
+Khi Dungeon đang chạy, bot nhận diện thông báo chứa `spawn` và tự vào lại `/d` sau 2 giây, nhưng giữ nguyên AutoFarm. Có thể đổi từ khóa và thời gian bằng `dungeon.spawnPatterns` và `dungeon.spawnReentryDelayMs`; nếu server không gửi thông báo spawn, hãy cấu hình tọa độ `dungeon.spawnPosition`.
+
+Mode Câu cá (`Bật Câu cá` hoặc `!start fishing`) gửi `/afk`, thử lần lượt slot `11`, `13`, `15` nếu slot trước đầy, tìm nước gần nhất, cầm `fishing_rod` và tự thả cần lặp lại. Các slot, bán kính tìm nước và tên cần câu nằm trong `fishing` của `config/config.json`.
+
+Khi bị kick, `socketClosed` hoặc lỗi kết nối, bot tự tạo kết nối mới sau 5 giây; thời gian chờ tăng dần đến tối đa 60 giây nếu tiếp tục thất bại. Nó vào lại SkyBlock, thực hiện `/is` một lần rồi tiếp tục mode đang chạy. Dungeon giữ thời gian chờ vào lại theo `dungeon.reentryDelayMs` (mặc định 300 giây).
+
+Các lệnh `!…` bên dưới vẫn được giữ để tương thích:
 
 - `!status`
 - `!start collector` hoặc `!start dungeon`
@@ -191,6 +235,8 @@ Sau khi phát hiện lỗi sẽ kích hoạt Recovery.
 ## 12. Discord
 
 Điều khiển Bot từ xa:
+
+- `/panel`: Bảng điều khiển Discord bằng nút bấm (chỉ owner sử dụng được).
 
 - Start
 - Stop

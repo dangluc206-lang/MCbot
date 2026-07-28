@@ -2,14 +2,18 @@
 
 const {
     CollectorService,
+    ChatService,
+    ConfigurationService,
     DungeonService,
+    FishingService,
     GUIService,
     InventoryService,
     MiningService,
     MovementService,
     PlayerService,
     SkyBlockService,
-    StorageService
+    StorageService,
+    ViewService
 } = require('../services');
 
 /**
@@ -23,6 +27,16 @@ const {
  */
 
 module.exports = function registerServices(ctx) {
+
+    ctx.registerService(
+        'configuration',
+        new ConfigurationService(ctx)
+    );
+
+    ctx.registerService(
+        'chat',
+        new ChatService(ctx)
+    );
 
     ctx.registerService(
         'player',
@@ -67,6 +81,16 @@ module.exports = function registerServices(ctx) {
     ctx.registerService(
         'dungeon',
         new DungeonService(ctx)
+    );
+
+    ctx.registerService(
+        'fishing',
+        new FishingService(ctx)
+    );
+
+    ctx.registerService(
+        'view',
+        new ViewService(ctx)
     );
 
 };

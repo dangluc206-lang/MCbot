@@ -127,8 +127,15 @@ class MovementService extends BaseService {
                 result.status === 'noPath'
             ) {
 
+                const failedTarget = this.target;
+
+                this.moving = false;
+                this.target = null;
+
                 this.emit(
-                    Events.Movement.FAILED
+                    Events.Movement.FAILED,
+                    failedTarget,
+                    result
                 );
 
             }
@@ -167,7 +174,7 @@ class MovementService extends BaseService {
      *
      * @returns {Promise<String>}
      */
-    async moveTo(position) {
+    async moveTo(position, range = 1) {
 
         if (!this.bot) {
             return Result.FAILED;
@@ -176,6 +183,13 @@ class MovementService extends BaseService {
 
         if (!position) {
             return Result.MOVEMENT_FAILED;
+        }
+
+
+        if (!this.pathfinder) {
+
+            this.loadPathfinder();
+
         }
 
 
@@ -210,7 +224,7 @@ class MovementService extends BaseService {
                     position.x,
                     position.y,
                     position.z,
-                    1
+                    range
                 )
             );
 
@@ -266,6 +280,61 @@ class MovementService extends BaseService {
 
         }
 
+    }
+
+    async goto(position, range = 1, timeout = 60000) {
+        const started = await this.moveTo(position, range);
+        if (started !== Result.SUCCESS) return started;
+        const safeTimeout = Math.min(Math.max(Number(timeout) || 60000, 1000), 300000);
+        const taskId = `movement.goto.${Date.now()}`;
+        return new Promise(resolve => {
+            let settled = false;
+            const finish = result => {
+                if (settled) return;
+                settled = true;
+                this.events.off(Events.Movement.ARRIVED, onArrived);
+                this.events.off(Events.Movement.FAILED, onFailed);
+                this.scheduler.cancel(taskId);
+                resolve(result);
+            };
+            const onArrived = () => finish(Result.SUCCESS);
+            const onFailed = () => finish(Result.NO_PATH);
+            this.events.on(Events.Movement.ARRIVED, onArrived);
+            this.events.on(Events.Movement.FAILED, onFailed);
+            this.scheduler.timeout(taskId, () => {
+                this.stop();
+                finish(Result.TIMEOUT);
+            }, safeTimeout);
+        });
+    }
+
+    async follow(playerName, range = 2) {
+        if (!this.pathfinder) this.loadPathfinder();
+        const entity = this.bot?.players?.[playerName]?.entity;
+        if (!entity || !this.pathfinder) return Result.FAILED;
+        this.moving = true;
+        this.target = { playerName, range };
+        this.startedAt = Date.now();
+        this.preparePathfinder();
+        this.pathfinder.setGoal(new GoalFollow(entity, range), true);
+        this.emit(Events.Movement.START, this.target);
+        return Result.SUCCESS;
+    }
+
+    async lookAt(position) {
+        if (!position || ![position.x, position.y, position.z].every(Number.isFinite) || !this.bot?.lookAt) return Result.FAILED;
+        await this.bot.lookAt(new Vec3(position.x, position.y, position.z), true);
+        return Result.SUCCESS;
+    }
+
+    jump(duration = 250) {
+        if (!this.bot?.setControlState) return Result.FAILED;
+        const safeDuration = Math.min(Math.max(Number(duration) || 250, 50), 1000);
+        this.bot.setControlState('jump', true);
+        this.scheduler.timeout('movement.manualJump', () => {
+            this.bot.setControlState('jump', false);
+        }, safeDuration);
+        return Result.SUCCESS;
     }
 
 

@@ -29,6 +29,12 @@ class CollectorMode extends BaseMode {
             return joined;
         }
 
+        const island = await this.service('skyblock').waitForIsland();
+        if (island !== Result.SUCCESS) {
+            await super.stop();
+            return island;
+        }
+
         return this.service('collector').start();
 
     }
@@ -78,6 +84,17 @@ class CollectorMode extends BaseMode {
 
         return Result.SUCCESS;
 
+    }
+
+    async pause() {
+        const result = await super.pause();
+        if (result !== Result.SUCCESS) return result;
+        await this.service('movement').stop();
+        return Result.SUCCESS;
+    }
+
+    async resume() {
+        return super.resume();
     }
 
     /**
