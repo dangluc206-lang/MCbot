@@ -84,6 +84,74 @@ test('collector mode records only bot collection events', async () => {
     await framework.stop();
 });
 
+test('storage title parser records capacity bars from the real NBT shape', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {});
+    await framework.start();
+
+    const title = {
+        type: 'compound',
+        value: {
+            text: { type: 'string', value: '' },
+            extra: {
+                type: 'list',
+                value: {
+                    type: 'compound',
+                    value: [
+                        { text: { type: 'string', value: 'KHO ' } },
+                        { text: { type: 'string', value: '▮▮▮▮' } },
+                        { text: { type: 'string', value: '▯▯▯▯' } }
+                    ]
+                }
+            }
+        },
+        toString: () => ''
+    };
+
+    bot.emit('windowOpen', { title, slots: Array(54), inventoryStart: 54 });
+
+    const storage = framework.runtime.state.storage.gui;
+    assert.equal(storage.filledSegments, 4);
+    assert.equal(storage.totalSegments, 8);
+    assert.match(storage.title, /▮▮▮▮▯▯▯▯/);
+    await framework.stop();
+});
+
+test('storage sells each configured ore through its service API', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {
+        storage: { selectedOres: ['DIAMOND', 'IRON_BLOCK'], sellCommandDelayMs: 0 }
+    });
+    await framework.start();
+
+    const storage = framework.ctx.getService('storage');
+    assert.equal(await storage.sellStorage(), Result.SUCCESS);
+    assert.deepEqual(bot.chatMessages, ['/kho sell diamond', '/kho sell iron_block']);
+    await framework.stop();
+});
+
+test('mode manager rolls back a mode that fails during start', async () => {
+    const framework = new Framework(new FakeBot(), {});
+    await framework.start();
+
+    const manager = framework.ctx.getManager('mode');
+    const brokenMode = {
+        name: 'BrokenMode',
+        modeState: 'STOPPED',
+        running: true,
+        async start() { return Result.FAILED; },
+        isRunning() { return this.running; },
+        async stop() { this.running = false; return Result.SUCCESS; }
+    };
+    manager.register('broken', brokenMode);
+
+    assert.equal(await manager.start('broken'), Result.FAILED);
+    assert.equal(manager.current(), null);
+    assert.equal(framework.runtime.state.mode.current, null);
+    assert.equal(brokenMode.running, false);
+    await framework.stop();
+});
+
 test('SkyBlock workflow reports each GUI step and waits for confirmation', async () => {
     const bot = new FakeBot();
     const framework = new Framework(bot, {

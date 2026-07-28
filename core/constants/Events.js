@@ -48,6 +48,7 @@ const Player = Object.freeze({
     TELEPORT: 'player.teleport',
     CHAT: 'player.chat',
     MESSAGE: 'player.message',
+    ACTION_BAR: 'player.actionBar',
     EXPERIENCE: 'player.experience'
 });
 

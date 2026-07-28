@@ -20,6 +20,7 @@ class Framework {
         this.engine = null;
         this.started = false;
         this.stopped = false;
+        this.initializing = false;
 
         this.createContext();
     }
@@ -44,6 +45,7 @@ class Framework {
             this.stopped = false;
         }
 
+        this.initializing = true;
         try {
             registerManagers(this.ctx);
 
@@ -75,11 +77,13 @@ class Framework {
             this.ctx.errorHandler?.handle(error, { phase: 'framework.start' });
             await this.stop();
             return Result.FAILED;
+        } finally {
+            this.initializing = false;
         }
     }
 
     async stop() {
-        if (!this.started) {
+        if (!this.started && !this.initializing) {
             return Result.NO_ACTION;
         }
 

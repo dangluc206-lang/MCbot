@@ -31,7 +31,7 @@ class DiscordPermissionManager {
             : new Set(interaction.member?.roles || []);
         if ([...roleIds].some(id => this.adminRoleIds.has(id))) return Permission.ADMIN;
         if ([...roleIds].some(id => this.moderatorRoleIds.has(id))) return Permission.MODERATOR;
-        if (this.viewerRoleIds.size === 0 || [...roleIds].some(id => this.viewerRoleIds.has(id))) return Permission.VIEWER;
+        if ([...roleIds].some(id => this.viewerRoleIds.has(id))) return Permission.VIEWER;
         return null;
     }
 

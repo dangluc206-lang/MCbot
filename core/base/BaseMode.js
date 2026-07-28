@@ -63,7 +63,7 @@ class BaseMode {
          * @type {Boolean}
          */
         this.paused = false;
-        this.needRequested = false;
+        this.needRecovery = false;
         this.recoveryReason = null;
 
         /**

@@ -68,7 +68,6 @@ function nextResetDelay(now, resetConfig = {}) {
 function loadConfig(configPath = path.join(__dirname, 'config', 'config.json')) {
     const fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     const minecraft = fileConfig.minecraft || {};
-    const discord = fileConfig.discord || {};
     const skyblock = fileConfig.skyblock || {};
 
     const loaded = {
@@ -82,22 +81,25 @@ function loadConfig(configPath = path.join(__dirname, 'config', 'config.json')) 
             auth: process.env.MINECRAFT_AUTH || minecraft.auth || 'offline'
         },
         discord: {
-            ...discord,
-            enabled: process.env.DISCORD_ENABLED !== 'false' && (discord.enabled ?? true),
-            token: process.env.DISCORD_TOKEN || discord.token || '',
-            ownerId: process.env.DISCORD_OWNER_ID || discord.ownerId || '',
-            ownerIds: process.env.DISCORD_OWNER_IDS || discord.ownerIds || '',
-            controlChannelId: process.env.DISCORD_CONTROL_CHANNEL_ID || discord.controlChannelId || '',
-            configChannelId: process.env.DISCORD_CONFIG_CHANNEL_ID || discord.configChannelId || '',
-            notificationChannelId: process.env.DISCORD_NOTIFICATION_CHANNEL_ID || discord.notificationChannelId || '',
-            errorChannelId: process.env.DISCORD_ERROR_CHANNEL_ID || discord.errorChannelId || '',
+            // Discord is process configuration, never gameplay configuration.
+            // Do not fall back to config.json: it can be written by the Config
+            // Panel and must not become a source of tokens or access control.
+            enabled: String(process.env.DISCORD_ENABLED || 'false').toLowerCase() === 'true',
+            token: process.env.DISCORD_TOKEN || '',
+            ownerId: process.env.DISCORD_OWNER_ID || '',
+            ownerIds: process.env.DISCORD_OWNER_IDS || '',
+            controlChannelId: process.env.DISCORD_CONTROL_CHANNEL_ID || '',
+            configChannelId: process.env.DISCORD_CONFIG_CHANNEL_ID || '',
+            notificationChannelId: process.env.DISCORD_NOTIFICATION_CHANNEL_ID || '',
+            errorChannelId: process.env.DISCORD_ERROR_CHANNEL_ID || '',
             defaultEphemeral: process.env.DISCORD_DEFAULT_EPHEMERAL
                 ? process.env.DISCORD_DEFAULT_EPHEMERAL === 'true'
-                : (discord.defaultEphemeral ?? true)
+                : true,
+            liveStatusIntervalMs: Number(process.env.DISCORD_LIVE_STATUS_INTERVAL_MS || 5000)
         },
         skyblock: {
             ...skyblock,
-            loginPassword: process.env.SKYBLOCK_LOGIN_PASSWORD || skyblock.loginPassword || ''
+            loginPassword: process.env.SKYBLOCK_LOGIN_PASSWORD || ''
         }
     };
     Object.defineProperty(loaded, 'configPath', { value: configPath, enumerable: false });

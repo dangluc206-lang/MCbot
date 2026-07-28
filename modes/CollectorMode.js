@@ -9,6 +9,7 @@ class CollectorMode extends BaseMode {
         super(ctx);
 
         this.name = 'CollectorMode';
+        this.nextStorageGuiCheckAt = 0;
     }
 
     /**
@@ -35,6 +36,7 @@ class CollectorMode extends BaseMode {
             return island;
         }
 
+        this.nextStorageGuiCheckAt = Date.now() + this._storageGuiCheckInterval();
         return this.service('collector').start();
 
     }
@@ -61,6 +63,24 @@ class CollectorMode extends BaseMode {
         if (this.service('inventory').isFull()) {
 
             await this.service('storage').sellAll();
+
+            return Result.SUCCESS;
+        }
+
+        if (Date.now() >= this.nextStorageGuiCheckAt) {
+            this.nextStorageGuiCheckAt = Date.now() + this._storageGuiCheckInterval();
+            const storage = this.service('storage');
+            const result = await storage.refreshStorageGui();
+
+            if (result !== Result.SUCCESS) {
+                this.warn(`Không cập nhật được /kho: ${result}`);
+            } else if (storage.isStorageFull()) {
+                this.warn('Kho NPC đầy; bắt đầu bán các ore/block đã cấu hình.');
+                const sold = await storage.sellStorage();
+                if (sold !== Result.SUCCESS) {
+                    this.warn(`Không bán được kho: ${sold}`);
+                }
+            }
 
             return Result.SUCCESS;
         }
@@ -108,6 +128,15 @@ class CollectorMode extends BaseMode {
 
         return super.stop();
 
+    }
+
+    /**
+     * @returns {Number}
+     * @private
+     */
+    _storageGuiCheckInterval() {
+        const configured = this.config.storage?.guiCheckIntervalMs;
+        return Number.isFinite(configured) && configured >= 5000 ? configured : 30000;
     }
 
 }

@@ -1,6 +1,6 @@
 'use strict';
 
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, MessageFlags } = require('discord.js');
 const Colors = require('./constants/DiscordColors');
 const truncate = require('./utils/truncate');
 
@@ -8,9 +8,9 @@ const truncate = require('./utils/truncate');
 class DiscordResponse {
     static async send(interaction, payload) {
         const defaultEphemeral = interaction.client?.mcbotController?.ctx.config.discord?.defaultEphemeral;
-        const normalized = payload.ephemeral === undefined && defaultEphemeral !== undefined
-            ? { ...payload, ephemeral: defaultEphemeral }
-            : payload;
+        const ephemeral = payload.ephemeral ?? defaultEphemeral;
+        const { ephemeral: ignored, ...rest } = payload;
+        const normalized = ephemeral ? { ...rest, flags: MessageFlags.Ephemeral } : rest;
         if (interaction.deferred) {
             const { ephemeral, ...editable } = normalized;
             return interaction.editReply(editable);

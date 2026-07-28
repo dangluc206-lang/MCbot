@@ -79,8 +79,8 @@ class DiscordController {
         for (const [customId, handler] of dashboardButton.selects) this.registry.registerSelect(customId, handler);
         for (const [customId, handler] of shutdownButtons) this.registry.registerButton(customId, handler);
         this.registry.registerButton(...movementStopButton);
-        this.registry.registerButton(...configHandlers.button);
-        this.registry.registerModal(...configHandlers.modal);
+        for (const [customId, handler] of configHandlers.buttons) this.registry.registerButton(customId, handler);
+        for (const [customId, handler] of configHandlers.modals) this.registry.registerModal(customId, handler);
         for (const [customId, handler] of configHandlers.selects) this.registry.registerSelect(customId, handler);
         for (const [customId, handler] of controlPanel.handlers) this.registry.registerButton(customId, handler);
         this.registry.registerSelect(...controlPanel.select);
@@ -111,6 +111,7 @@ class DiscordController {
         if (!token) throw new Error('Discord token is required when Discord is enabled.');
         this.ctx.discordController = this;
         this.client = new Client({ intents: [GatewayIntentBits.Guilds] });
+        this.client.mcbotController = this;
         const ready = new Promise(resolve => this.client.once(DiscordEvents.ClientReady, client => {
             this.ctx.logger?.success(`[DiscordController] Online as ${client.user.tag}.`);
             resolve();
@@ -141,6 +142,7 @@ class DiscordController {
         this.configPanel?.stop();
         this.configPanel = null;
         this.client?.destroy();
+        if (this.client) this.client.mcbotController = null;
         this.client = null;
         this.started = false;
     }

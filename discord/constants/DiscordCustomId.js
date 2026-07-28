@@ -26,5 +26,8 @@ module.exports = Object.freeze({
     CONFIG_FISHING: 'config:fishing',
     CONFIG_ORES: 'config:ores',
     CONFIG_COORDS: 'config:coords',
-    CONFIG_COORDS_MODAL: 'config:coords:modal'
+    CONFIG_COORDS_MODAL: 'config:coords:modal',
+    CONFIG_EDIT: 'config:edit',
+    CONFIG_EDIT_MODAL: 'config:edit:modal',
+    CONFIG_REFRESH: 'config:refresh'
 });

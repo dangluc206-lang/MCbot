@@ -61,12 +61,16 @@ class DiscordInteractionRouter {
         }
 
         try {
-            if (handler.defer) await interaction.deferReply({ ephemeral: Boolean(handler.ephemeral) });
+            if (handler.defer) await interaction.deferReply(handler.ephemeral ? { flags: 64 } : {});
             const result = await handler.execute(ctx, interaction);
             auditLog(ctx, interaction, auditName, startedAt, 'SUCCESS');
             return result;
         }
         catch (error) {
+            if (error?.code === 10062) {
+                ctx.logger?.warn('[Discord] Interaction expired before it could be acknowledged.');
+                return;
+            }
             ctx.errorHandler?.handle(error, { phase: 'discord.interaction', action: auditName, userId: interaction.user?.id });
             auditLog(ctx, interaction, auditName, startedAt, 'FAILED');
             return DiscordResponse.error(interaction, 'Thao tác thất bại. Xem terminal để biết chi tiết.', true);

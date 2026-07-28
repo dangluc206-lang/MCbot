@@ -62,6 +62,7 @@ function createRuntime() {
             rotation: null,
             yaw: 0,
             pitch: 0,
+            lastActionBar: null,
 
 
             dead: false,
@@ -161,7 +162,18 @@ function createRuntime() {
 
             selectedOres: [],
             sellCommand: '/kho sell',
-            lastSell: 0
+            lastSell: 0,
+            full: false,
+            gui: {
+                title: null,
+                rawTitle: null,
+                usedSlots: 0,
+                totalSlots: 0,
+                filledSegments: 0,
+                totalSegments: 0,
+                full: false,
+                updatedAt: null
+            }
         },
 
         /**

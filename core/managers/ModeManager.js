@@ -146,9 +146,25 @@ class ModeManager extends BaseManager {
 
         this.state.mode.current = mode.name;
 
-        const result = await mode.start();
-        if (result === Result.SUCCESS) this.ctx.getManager('events')?.emit(Events.Mode.START, name);
-        return result;
+        try {
+            const result = await mode.start();
+            if (result === Result.SUCCESS) {
+                this.ctx.getManager('events')?.emit(Events.Mode.START, name);
+                return result;
+            }
+
+            if (mode.isRunning?.()) await mode.stop();
+            this.currentMode = null;
+            this.state.mode.current = null;
+            this.state.mode.state = mode.modeState;
+            return result;
+        } catch (error) {
+            if (mode.isRunning?.()) await mode.stop();
+            this.currentMode = null;
+            this.state.mode.current = null;
+            this.state.mode.state = mode.modeState;
+            throw error;
+        }
     }
 
     /**

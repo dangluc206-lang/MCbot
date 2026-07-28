@@ -14,20 +14,11 @@
     "waitMinutes": 10,
     "preWaitMinutes": 1
   },
-  "discord": {
-    "enabled": true,
-    "ownerId": "your-discord-user-id",
-    "ownerIds": "your-discord-user-id",
-    "controlChannelId": "",
-    "configChannelId": "",
-    "notificationChannelId": "",
-    "errorChannelId": "",
-    "defaultEphemeral": true,
-    "liveStatusIntervalMs": 5000
-  },
   "logging": {
     "level": "SUCCESS",
     "includeStack": false,
+    "actionBar": false,
+    "guiSlots": false,
     "timeZone": "Asia/Ho_Chi_Minh"
   },
   "viewer": {
@@ -75,6 +66,11 @@
     "attackIntervalMs": 600
   },
   "storage": {
+    "guiCommand": "/kho",
+    "guiTimeoutMs": 5000,
+    "guiCheckIntervalMs": 30000,
+    "sellCommand": "/kho sell",
+    "sellCommandDelayMs": 350,
     "mine": ["coal_ore", "iron_ore"],
     "selectedOres": ["coal_ore", "iron_ore"],
     "oreOptions": ["coal_ore", "iron_ore", "copper_ore", "gold_ore", "redstone_ore", "lapis_ore", "diamond_ore", "emerald_ore", "coal_block", "iron_block", "copper_block", "gold_block", "redstone_block", "lapis_block", "diamond_block", "emerald_block"]

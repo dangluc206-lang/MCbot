@@ -44,6 +44,7 @@ test('permission manager resolves owner and role hierarchy', () => {
     assert.equal(manager.can(interaction({ user: { id: 'owner' } }), Permission.OWNER), true);
     assert.equal(manager.can(interaction({ member: { roles: { cache: new Map([['admin-role', {}]]) } } }), Permission.ADMIN), true);
     assert.equal(manager.can(interaction({ member: { roles: { cache: new Map([['mod-role', {}]]) } } }), Permission.ADMIN), false);
+    assert.equal(new DiscordPermissionManager({ ownerIds: 'owner' }).can(interaction(), Permission.VIEWER), false);
 });
 
 test('registry rejects duplicate command names', () => {
@@ -90,7 +91,7 @@ test('router rejects minecraft command while bot is offline', async () => {
     ctx.runtime.state.bot.connected = false;
     const registry = new DiscordCommandRegistry();
     registry.register({ data: { name: 'test', toJSON: () => ({ name: 'test' }) }, minecraftRequired: true, async execute() { throw new Error('must not execute'); } });
-    const target = interaction();
+    const target = interaction({ user: { id: 'owner' } });
     await new DiscordInteractionRouter({ getContext: () => ctx, registry, permissions: new DiscordPermissionManager(ctx.config.discord), cooldown: new Cooldown() }).handle(target);
     assert.match(target.payload.embeds[0].data.description, /Minecraft bot chưa sẵn sàng/);
 });
