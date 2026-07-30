@@ -6,13 +6,28 @@ const truncate = require('./utils/truncate');
 
 /** Safely acknowledges an interaction exactly once. */
 class DiscordResponse {
+    static resolveEphemeral(interaction, requested) {
+        if (typeof requested === 'boolean') return requested;
+        return Boolean(interaction.client?.mcbotController?.ctx.config.discord?.defaultEphemeral);
+    }
+
+    static async defer(interaction, ephemeral) {
+        if (interaction.deferred || interaction.replied) return;
+        const options = this.resolveEphemeral(interaction, ephemeral)
+            ? { flags: MessageFlags.Ephemeral }
+            : {};
+        return interaction.deferReply(options);
+    }
+
     static async send(interaction, payload) {
-        const defaultEphemeral = interaction.client?.mcbotController?.ctx.config.discord?.defaultEphemeral;
-        const ephemeral = payload.ephemeral ?? defaultEphemeral;
-        const { ephemeral: ignored, ...rest } = payload;
-        const normalized = ephemeral ? { ...rest, flags: MessageFlags.Ephemeral } : rest;
+        const { ephemeral: requestedEphemeral, ...rest } = payload;
+        const normalized = this.resolveEphemeral(interaction, requestedEphemeral)
+            ? { ...rest, flags: (rest.flags || 0) | MessageFlags.Ephemeral }
+            : rest;
         if (interaction.deferred) {
-            const { ephemeral, ...editable } = normalized;
+            // Ephemeral visibility is immutable after deferReply(). Discord
+            // rejects flags on editReply(), so do not forward them.
+            const { flags, ...editable } = normalized;
             return interaction.editReply(editable);
         }
         if (interaction.replied) return interaction.followUp(normalized);

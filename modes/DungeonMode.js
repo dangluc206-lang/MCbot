@@ -98,6 +98,13 @@ class DungeonMode extends BaseMode {
             return joined;
         }
 
+        // DungeonService owns the delayed /d re-entry workflow. Do not mark
+        // it RUNNING while that timer is pending after a teleport/SkyBlock exit.
+        if (dungeon.isReentryPending()) {
+            this.clearRecovery();
+            return Result.SUCCESS;
+        }
+
         await this.service('movement').stop();
 
         if (!dungeon.isRunning()) {

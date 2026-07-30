@@ -62,7 +62,7 @@ module.exports = {
             const description = current ? `**${current.name}**\nState: ${current.modeState}\nPaused: ${current.isPaused()}\nRuntime: ${current.startedAt ? formatDuration(Date.now() - current.startedAt.getTime()) : '—'}` : 'Không có mode đang chạy.';
             return DiscordResponse.send(interaction, { embeds: [new EmbedBuilder().setColor(Colors.INFO).setTitle('Trạng thái mode').setDescription(description)] });
         }
-        await interaction.deferReply();
+        await DiscordResponse.defer(interaction);
         const result = subcommand === 'start'
             ? await manager.start(interaction.options.getString('name', true))
             : await manager[subcommand]();

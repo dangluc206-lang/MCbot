@@ -12,7 +12,7 @@ const CustomId = require('./constants/DiscordCustomId');
 const DEFAULT_ORES = Object.freeze([
     'COAL_BLOCK', 'COAL', 'COBBLESTONE', 'DIAMOND', 'DIAMOND_BLOCK',
     'EMERALD', 'EMERALD_BLOCK', 'GOLD_BLOCK', 'GOLD_INGOT', 'IRON_BLOCK',
-    'IRON_INGOT', 'LAPIS_LAZULI', 'RAW_GOLD', 'RAW_IRON', 'REDSTONE',
+    'IRON_INGOT', 'LAPIS_LAZULI','LAPIS_BLOCK', 'RAW_GOLD', 'RAW_IRON', 'REDSTONE',
     'REDSTONE_BLOCK', 'STONE'
 ]);
 const SKYBLOCK_SLOTS = Object.freeze(['12', '14']);
@@ -33,9 +33,10 @@ function payload(ctx, notice = 'Các thay đổi gameplay được lưu vào con
     const selected = (config.storage?.selectedOres || []).map(normalizeOre);
     const ores = [...new Set((config.storage?.oreOptions || DEFAULT_ORES).map(normalizeOre).filter(Boolean))].slice(0, 25);
     const storage = ctx.runtime.state.storage;
-    const capacity = storage.gui?.totalSegments > 0
-        ? `${storage.gui.filledSegments}/${storage.gui.totalSegments}`
-        : 'chưa đọc /kho';
+    const storageNumbers = storage.gui?.detail?.storage || {};
+    const capacity = Number.isFinite(storageNumbers.free)
+        ? `còn ${storageNumbers.free.toLocaleString('vi-VN')}/${Number.isFinite(storageNumbers.total) ? storageNumbers.total.toLocaleString('vi-VN') : '?'} `
+        : 'chưa đọc tooltip slot 49';
 
     const embed = new EmbedBuilder()
         .setColor(0x95a5a6)
@@ -43,8 +44,14 @@ function payload(ctx, notice = 'Các thay đổi gameplay được lưu vào con
         .setDescription([
             `SkyBlock slot: ${config.skyblock?.serverSlot ?? '—'} | Dungeon slot: ${config.dungeon?.entrySlot ?? '—'}`,
             `Fishing slots: ${(config.fishing?.afkSlots || []).join(', ') || '—'}`,
-            `Kho NPC: ${capacity} | Ore bán: ${selected.join(', ') || 'chưa chọn'}`,
+            `SHK: slot ${config.crafting?.targetSlot ?? 33} | nung raw x${config.storage?.smelting?.passes ?? 2} (slot ${config.storage?.smelting?.menuSlot ?? 12}) | đổi khối/phôi (slot ${config.storage?.conversion?.menuSlot ?? 10}) | /ks slot ${config.crafting?.entrySlot ?? 16}`,
+            `PV 2: ${config.crafting?.personalVault?.enabled === false ? 'tắt' : 'bật'} | cất SHK: ${config.crafting?.personalVault?.depositAfterCraft === false ? 'tắt' : 'bật'} | Craft click: ${config.crafting?.clickIntervalMs ?? 500} ms | retry: ${config.crafting?.clickAckMaxRetries ?? 2}`,
+            `Nhặt: ${config.collector?.pickupPosition ? JSON.stringify(config.collector.pickupPosition) : 'mặc định'} | tạo SHK khi đủ nguyên liệu thô | SHK ${config.collector?.superAlloyEnabled === false ? 'tắt' : 'bật'}`,
+            `Kho NPC: ${capacity} | Ore bán khi thiếu chỗ: ${selected.join(', ') || 'chưa chọn'}`,
             'Nút **Sửa config** nhận path gameplay và giá trị JSON; Discord/token/password luôn chỉ dùng .env.'
+            ,`SHK cooldown: ${config.collector?.superAlloyIntervalMs ?? 3600000} ms | retry: ${config.collector?.superAlloyRetryIntervalMs ?? 120000} ms`,
+            `Kho tự bán khi còn ≤ ${config.storage?.autoSellFreeThreshold ?? 150000} | Alias SHK: ${Object.keys(config.crafting?.materialAliases || {}).length} mục`,
+            'Sửa trực tiếp bằng path: storage.autoSellFreeThreshold, collector.superAlloyIntervalMs, collector.superAlloyRetryIntervalMs, crafting.clickAckMaxRetries, crafting.clickAckRetryDelayMs, crafting.materialAliases.<slot>.'
         ].join('\n'));
 
     return {
@@ -101,14 +108,36 @@ class ConfigPanelManager {
         this.channel = await this.client.channels.fetch(channelId);
         if (!this.channel?.isTextBased?.()) throw new Error('Discord config channel is not text based.');
 
+        await this._ensureMessage();
+    }
+
+    async refresh(notice = 'Cấu hình gameplay đã được cập nhật.') {
+        if (!this.message) await this._ensureMessage();
+        if (!this.message) return null;
+        try {
+            await this.message.edit(payload(this.ctx, notice));
+        } catch (error) {
+            if (![10008, 10003].includes(error?.code)) throw error;
+            this.message = null;
+            await this._ensureMessage();
+        }
+        return this.message;
+    }
+
+    async _ensureMessage() {
+        if (!this.channel) return null;
         const recent = await this.channel.messages.fetch({ limit: 25 });
-        this.message = recent.find(message => (
+        const messages = typeof recent?.find === 'function'
+            ? recent
+            : [...(recent?.values?.() || [])];
+        this.message = messages.find(message => (
             message.author.id === this.client.user.id
             && message.embeds.some(embed => embed.title === 'Bot Configuration')
         )) || null;
         if (!this.message) {
             this.message = await this.channel.send(payload(this.ctx, 'Bảng cấu hình gameplay — chỉ Owner/Admin được chỉnh.'));
         }
+        return this.message;
     }
 
     updateContext(ctx) {

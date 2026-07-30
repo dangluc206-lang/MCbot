@@ -30,9 +30,9 @@ module.exports = {
             const modes = ctx.getManager('mode').names();
             return DiscordResponse.send(interaction, { content: 'Chọn mode cần chạy:', ephemeral: true, components: [new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('mode:choose').setPlaceholder('Chọn mode').addOptions(modes.map(name => ({ label: name, value: name }))))] });
         } }],
-        [CustomId.MODE_STOP, { permission: Permission.ADMIN, cooldown: 3, minecraftRequired: true, async execute(ctx, interaction) { await ctx.getManager('mode').stop(); return interaction.update({ embeds: [dashboardEmbed(ctx)], components: dashboardComponents() }); } }],
-        [CustomId.MODE_PAUSE, { permission: Permission.MODERATOR, cooldown: 3, minecraftRequired: true, async execute(ctx, interaction) { await ctx.getManager('mode').pause(); return interaction.update({ embeds: [dashboardEmbed(ctx)], components: dashboardComponents() }); } }],
-        [CustomId.MODE_RESUME, { permission: Permission.MODERATOR, cooldown: 3, minecraftRequired: true, async execute(ctx, interaction) { await ctx.getManager('mode').resume(); return interaction.update({ embeds: [dashboardEmbed(ctx)], components: dashboardComponents() }); } }]
+        [CustomId.MODE_STOP, { permission: Permission.ADMIN, cooldown: 3, minecraftRequired: true, defer: true, async execute(ctx, interaction) { await ctx.getManager('mode').stop(); return interaction.editReply({ embeds: [dashboardEmbed(ctx)], components: dashboardComponents() }); } }],
+        [CustomId.MODE_PAUSE, { permission: Permission.MODERATOR, cooldown: 3, minecraftRequired: true, defer: true, async execute(ctx, interaction) { await ctx.getManager('mode').pause(); return interaction.editReply({ embeds: [dashboardEmbed(ctx)], components: dashboardComponents() }); } }],
+        [CustomId.MODE_RESUME, { permission: Permission.MODERATOR, cooldown: 3, minecraftRequired: true, defer: true, async execute(ctx, interaction) { await ctx.getManager('mode').resume(); return interaction.editReply({ embeds: [dashboardEmbed(ctx)], components: dashboardComponents() }); } }]
     ],
     selects: [
         ['mode:choose', { permission: Permission.ADMIN, cooldown: 3, minecraftRequired: true, async execute(ctx, interaction) {

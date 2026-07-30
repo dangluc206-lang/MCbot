@@ -55,7 +55,9 @@ class DungeonService extends BaseService {
         this.storing = false;
         this.ignoreTeleportUntil = 0;
         this.needsReentryAfterDisconnect = false;
+        this.needsReentryAfterSkyBlockLeave = false;
         this.autoFarmActive = false;
+        this.lastKnownPosition = null;
     }
 
 
@@ -70,10 +72,13 @@ class DungeonService extends BaseService {
         this.state.dungeon.state = States.Dungeon.IDLE;
         this.state.dungeon.running = false;
         this.state.dungeon.waitingRespawn = false;
+        this.rememberPosition();
         this.bind(this.bot, 'kicked', () => this.handleDisconnect());
         this.bind(this.bot, 'end', () => this.handleDisconnect());
+        this.bind(this.bot, 'move', () => this.rememberPosition());
         this.bind(this.bot, 'forcedMove', () => this.checkForSpawnReturn());
         this.bind(this.bot, 'messagestr', message => this.checkSpawnMessage(message));
+        this.bind(this.events, Events.SkyBlock.LEAVE, () => this.handleSkyBlockLeave());
         this.bind(this.events, Events.SkyBlock.JOINED, () => this.tryScheduleReentry());
 
         return Result.SUCCESS;
@@ -89,7 +94,9 @@ class DungeonService extends BaseService {
 
         this.running = false;
         this.ignoreTeleportUntil = 0;
+        this.needsReentryAfterSkyBlockLeave = false;
         this.autoFarmActive = false;
+        this.lastKnownPosition = null;
         if (this.reentryTimer) clearTimeout(this.reentryTimer);
         if (this.spawnCheckTimer) clearTimeout(this.spawnCheckTimer);
         this.reentryTimer = null;
@@ -117,6 +124,7 @@ class DungeonService extends BaseService {
 
 
         this.running = true;
+        this.rememberPosition();
 
         this.state.dungeon.running = true;
         this.state.dungeon.state =
@@ -148,7 +156,9 @@ class DungeonService extends BaseService {
 
         this.running = false;
         this.ignoreTeleportUntil = 0;
+        this.needsReentryAfterSkyBlockLeave = false;
         this.autoFarmActive = false;
+        this.lastKnownPosition = null;
         if (this.reentryTimer) clearTimeout(this.reentryTimer);
         if (this.spawnCheckTimer) clearTimeout(this.spawnCheckTimer);
         this.reentryTimer = null;
@@ -205,7 +215,8 @@ class DungeonService extends BaseService {
             }
 
             this.info(`Đang gửi ${command}.`);
-            this.bot.chat(command);
+            const sent = await this.service('chat').sendCommand(command);
+            if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi ${command}: ${sent}.`);
 
             const window = await this.waitForWindow(gui, settings.guiTimeoutMs ?? 10000);
             await this.waitForSlot(gui, slot, settings.slotReadyTimeoutMs ?? 3000);
@@ -375,7 +386,8 @@ class DungeonService extends BaseService {
         const slot = settings.autofarmSlot ?? 21;
 
         this.info(`Đang gửi ${command}.`);
-        this.bot.chat(command);
+        const sent = await this.service('chat').sendCommand(command);
+        if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi ${command}: ${sent}.`);
         await this.delay(settings.autofarmMenuDelayMs ?? 1000);
         await this.waitForWindow(gui, settings.guiTimeoutMs ?? 10000, previousWindow);
         await this.waitForSlot(gui, slot, settings.slotReadyTimeoutMs ?? 3000);
@@ -399,10 +411,25 @@ class DungeonService extends BaseService {
         this.info('Mất kết nối; AutoFarm đã tắt và sẽ bật lại sau khi reconnect vào SkyBlock.');
     }
 
+    handleSkyBlockLeave() {
+        if (!this.running) return;
+        // This is not a socket kick, so the server-side AutoFarm selection is
+        // preserved. Only wait for SkyBlock recovery, then enter /d again.
+        this.needsReentryAfterSkyBlockLeave = true;
+        this.state.dungeon.state = States.Dungeon.WAITING_RESPAWN;
+        this.info('Đã rời SkyBlock khi Dungeon đang chạy; sẽ vào lại /d sau khi SkyBlock hồi phục.');
+    }
+
     tryScheduleReentry() {
-        if (!this.needsReentryAfterDisconnect || !this.running || !this.state.skyblock.joined) return;
+        if ((!this.needsReentryAfterDisconnect && !this.needsReentryAfterSkyBlockLeave)
+            || !this.running || !this.state.skyblock.joined) return;
         this.needsReentryAfterDisconnect = false;
+        this.needsReentryAfterSkyBlockLeave = false;
         this.scheduleReentry();
+    }
+
+    isReentryPending() {
+        return Boolean(this.reentryTask || this.needsReentryAfterDisconnect || this.needsReentryAfterSkyBlockLeave);
     }
 
     scheduleReentry(wait = (this.config.dungeon || {}).reentryDelayMs ?? 300000, reason = 'Đã reconnect vào SkyBlock') {
@@ -434,13 +461,41 @@ class DungeonService extends BaseService {
 
     checkForSpawnReturn() {
         if (!this.running || this.entering || this.spawnCheckTimer) return;
+        const forcedMoveDistance = this.distanceFromLastKnownPosition();
+        if (Date.now() < this.ignoreTeleportUntil) {
+            this.rememberPosition();
+            return;
+        }
         const delay = (this.config.dungeon || {}).spawnCheckDelayMs ?? 1000;
         this.spawnCheckTimer = setTimeout(() => {
             this.spawnCheckTimer = null;
             if (this.isAtConfiguredSpawn()) {
                 this.scheduleSpawnReentry('Bot bị server teleport về vị trí /spawn.');
+            } else if ((this.config.dungeon || {}).reenterOnUnexpectedForcedMove !== false
+                && forcedMoveDistance >= this.unexpectedTeleportMinDistance()) {
+                this.scheduleSpawnReentry(`Bot bị server teleport ${forcedMoveDistance.toFixed(1)} block ra khỏi Dungeon.`);
             }
+            this.rememberPosition();
         }, delay);
+    }
+
+    rememberPosition() {
+        const position = this.bot.entity?.position;
+        this.lastKnownPosition = position?.clone?.() || (position
+            ? { x: position.x, y: position.y, z: position.z }
+            : null);
+    }
+
+    distanceFromLastKnownPosition() {
+        const before = this.lastKnownPosition;
+        const current = this.bot.entity?.position;
+        if (!before || !current) return 0;
+        return Math.hypot(current.x - before.x, current.y - before.y, current.z - before.z);
+    }
+
+    unexpectedTeleportMinDistance() {
+        const value = Number((this.config.dungeon || {}).unexpectedTeleportMinDistance);
+        return Number.isFinite(value) ? Math.min(Math.max(value, 1), 128) : 12;
     }
 
     isAtConfiguredSpawn() {
@@ -472,7 +527,9 @@ class DungeonService extends BaseService {
         try {
             this.storing = true;
             this.info('Inventory đầy; đang gửi /pv 2.');
-            this.bot.chat(settings.storageCommand || '/pv 2');
+            const command = settings.storageCommand || '/pv 2';
+            const sent = await this.service('chat').sendCommand(command);
+            if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi ${command}: ${sent}.`);
             const window = await this.waitForWindow(gui, settings.storageGuiTimeoutMs ?? 10000, previousWindow);
 
             let moved = 0;

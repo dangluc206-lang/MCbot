@@ -7,12 +7,16 @@
     "start": "node index.js",
     "smoke": "node scripts/smokeTest.js",
     "discord:register": "node scripts/register-discord-commands.js",
-    "test": "node --test"
+    "test:discord": "node --test --test-force-exit test/discord.test.js",
+    "test": "node --test --test-force-exit"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
   "dependencies": {
     "canvas": "^3.2.3",
     "discord.js": "^14.26.5",

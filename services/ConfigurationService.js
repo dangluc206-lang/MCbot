@@ -5,12 +5,16 @@ const BaseService = require('../core/base/BaseService');
 const Result = require('../core/constants/Result');
 
 const EDITABLE_ROOTS = new Set([
+    'minecraft',
     'skyblock',
     'storage',
     'dungeon',
     'fishing',
+    'crafting',
+    'collector',
     'viewer',
     'logging',
+    'guiProbe',
     'serverReset',
     'mine',
     'shop'
@@ -19,6 +23,8 @@ const EDITABLE_ROOTS = new Set([
 const PROTECTED_PATHS = new Set([
     'skyblock.loginPassword'
 ]);
+
+const OPTIONAL_ROOTS = new Set(['crafting', 'guiProbe']);
 
 /** Safely persists non-sensitive Discord configuration changes. */
 class ConfigurationService extends BaseService {
@@ -55,14 +61,40 @@ class ConfigurationService extends BaseService {
     }
 
     async set(path, value) {
-        if (typeof path !== 'string' || !/^[a-zA-Z][\w]*(\.[a-zA-Z][\w]*){1,2}$/.test(path)) return Result.FAILED;
+        // Recipe aliases use numeric GUI slots, e.g.
+        // `crafting.materialAliases.32`.  Root segments remain alphabetic,
+        // while nested keys may be numeric.
+        if (typeof path !== 'string' || !/^[a-zA-Z][\w]*(\.[a-zA-Z0-9_]+){1,2}$/.test(path)) return Result.FAILED;
         const root = path.split('.')[0];
         if (!EDITABLE_ROOTS.has(root) || PROTECTED_PATHS.has(path)) return Result.FAILED;
         const keys = path.split('.');
         let target = this.config;
-        for (const key of keys.slice(0, -1)) { if (!target || typeof target[key] !== 'object') return Result.FAILED; target = target[key]; }
+        const createdNodes = [];
+        for (const key of keys.slice(0, -1)) {
+            if (!target || typeof target !== 'object') return Result.FAILED;
+            if (!Object.prototype.hasOwnProperty.call(target, key)) {
+                if ((target === this.config && OPTIONAL_ROOTS.has(key)) || OPTIONAL_ROOTS.has(root)) {
+                    target[key] = {};
+                    createdNodes.push({ target, key });
+                }
+                else return Result.FAILED;
+            }
+            if (!target[key] || typeof target[key] !== 'object') return Result.FAILED;
+            target = target[key];
+        }
         const key = keys.at(-1);
-        if (!Object.prototype.hasOwnProperty.call(target, key)) return Result.FAILED;
+        if (!Object.prototype.hasOwnProperty.call(target, key)) {
+            if (!OPTIONAL_ROOTS.has(root)) return Result.FAILED;
+            target[key] = value;
+            const result = await this.save();
+            if (result !== Result.SUCCESS) {
+                delete target[key];
+                for (const node of createdNodes.reverse()) {
+                    if (Object.keys(node.target[node.key] || {}).length === 0) delete node.target[node.key];
+                }
+            }
+            return result;
+        }
         if (typeof target[key] !== typeof value && target[key] !== null) return Result.FAILED;
         const previous = target[key];
         target[key] = value;

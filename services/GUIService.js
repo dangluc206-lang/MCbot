@@ -283,7 +283,7 @@ class GUIService extends BaseService {
      *
      * @returns {Promise<String>}
      */
-    async click(slot) {
+    async click(slot, mouseButton = 0, mode = 0) {
 
         const window = this.window();
 
@@ -297,8 +297,8 @@ class GUIService extends BaseService {
 
             await this.bot.clickWindow(
                 slot,
-                0,
-                0
+                mouseButton,
+                mode
             );
 
 

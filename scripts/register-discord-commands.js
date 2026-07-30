@@ -1,6 +1,6 @@
 'use strict';
 
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const { REST, Routes } = require('discord.js');
 const DiscordController = require('../discord/DiscordController');

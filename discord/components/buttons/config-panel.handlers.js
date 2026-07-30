@@ -8,6 +8,7 @@ const {
 } = require('discord.js');
 const Permission = require('../../constants/DiscordPermission');
 const CustomId = require('../../constants/DiscordCustomId');
+const DiscordResponse = require('../../DiscordResponse');
 const { payload } = require('../../ConfigPanelManager');
 
 async function set(ctx, path, value) {
@@ -71,11 +72,12 @@ module.exports = {
             const slot = interaction.fields.getTextInputValue('slot');
             const vector = ['x', 'y', 'z'].map(key => Number(interaction.fields.getTextInputValue(key)));
             if (!['11', '13', '15'].includes(slot) || !vector.every(Number.isFinite)) {
-                return interaction.reply({ content: 'Tọa độ không hợp lệ.', flags: 64 });
+                return DiscordResponse.error(interaction, 'Tọa độ không hợp lệ.', true);
             }
             const targets = { ...(ctx.config.fishing.slotTargets || {}), [slot]: vector };
             const result = await set(ctx, 'fishing.slotTargets', targets);
-            return interaction.reply({ content: `Đã lưu slot ${slot}: ${result}`, flags: 64 });
+            await DiscordResponse.send(interaction, { content: `Đã lưu slot ${slot}: ${result}`, ephemeral: true });
+            if (result === 'SUCCESS') await ctx.discordController.configPanel?.refresh(`Đã lưu tọa độ Fishing slot ${slot}.`);
         }}],
         [CustomId.CONFIG_EDIT_MODAL, { permission: Permission.ADMIN, async execute(ctx, interaction) {
             const path = interaction.fields.getTextInputValue('path').trim();
@@ -84,12 +86,13 @@ module.exports = {
             try {
                 value = JSON.parse(input);
             } catch (error) {
-                return interaction.reply({ content: 'Giá trị phải là JSON hợp lệ, ví dụ `30000`, `true`, `"/d"` hoặc `["DIAMOND"]`.', flags: 64 });
+                return DiscordResponse.error(interaction, 'Giá trị phải là JSON hợp lệ, ví dụ `30000`, `true`, `"/d"` hoặc `["DIAMOND"]`.', true);
             }
 
             const result = await set(ctx, path, value);
             if (result === 'SUCCESS') syncRuntimeConfig(ctx, path, value);
-            return interaction.reply({ content: `Lưu ${path}: ${result}`, flags: 64 });
+            await DiscordResponse.send(interaction, { content: `Lưu ${path}: ${result}`, ephemeral: true });
+            if (result === 'SUCCESS') await ctx.discordController.configPanel?.refresh(`Đã lưu ${path}.`);
         }}]
     ]
 };

@@ -1,6 +1,6 @@
 'use strict';
 
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 
 const fs = require('fs');
 const path = require('path');
@@ -65,6 +65,83 @@ function nextResetDelay(now, resetConfig = {}) {
     return 24 * 60 * 60 * 1000;
 }
 
+function kickReconnectDelayMs(minecraftConfig = {}) {
+    const configuredKickDelay = Number(minecraftConfig.kickReconnectDelayMs);
+    return Number.isFinite(configuredKickDelay)
+        ? Math.min(Math.max(configuredKickDelay, 5000), 60 * 60 * 1000)
+        : 300000;
+}
+
+function skyJoinKickReconnectDelayMs(skyblockConfig = {}) {
+    const configuredRetryDelay = Number(skyblockConfig.joinRetryDelayMs);
+    return Number.isFinite(configuredRetryDelay)
+        ? Math.min(Math.max(configuredRetryDelay, 1000), 60000)
+        : 5000;
+}
+
+function reconnectDelayAfterKick(config = {}, skyJoinInProgress = false) {
+    return skyJoinInProgress
+        ? skyJoinKickReconnectDelayMs(config.skyblock)
+        : kickReconnectDelayMs(config.minecraft);
+}
+
+/**
+ * Return the stable registry key for the current mode. Runtime state holds a
+ * class name (such as `CollectorMode`), but reconnect must start `collector`.
+ */
+function activeModeName(framework) {
+    const modes = framework?.ctx?.getManager?.('mode');
+    if (!modes?.current) return null;
+    const current = modes.current();
+    return modes.names().find(name => modes.get(name) === current) || null;
+}
+
+/**
+ * Keeps the last user-started mode outside one Mineflayer connection. The
+ * Framework is destroyed on reconnect, so a late kick must not lose intent.
+ */
+function createModeResumeTracker() {
+    let modeName = null;
+    return {
+        remember(name) {
+            if (typeof name === 'string' && name.trim()) modeName = name.trim();
+        },
+        clear() {
+            modeName = null;
+        },
+        get() {
+            return modeName;
+        }
+    };
+}
+
+/**
+ * Starts/stops update the process-owned reconnect intent. A deliberate pause
+ * or stop takes precedence over an automatic continuation.
+ */
+function bindModeResumeTracker(framework, tracker) {
+    const events = framework?.ctx?.getManager?.('events');
+    const modes = framework?.ctx?.getManager?.('mode');
+    if (!events?.on || !events?.off || !modes?.has) return () => {};
+
+    const remember = name => {
+        const key = modes.has(name) ? name : activeModeName(framework);
+        if (key) tracker.remember(key);
+    };
+    const rememberCurrent = () => remember(activeModeName(framework));
+    const clear = () => tracker.clear();
+    events.on(Events.Mode.START, remember);
+    events.on(Events.Mode.RESUME, rememberCurrent);
+    events.on(Events.Mode.PAUSE, clear);
+    events.on(Events.Mode.STOP, clear);
+    return () => {
+        events.off(Events.Mode.START, remember);
+        events.off(Events.Mode.RESUME, rememberCurrent);
+        events.off(Events.Mode.PAUSE, clear);
+        events.off(Events.Mode.STOP, clear);
+    };
+}
+
 function loadConfig(configPath = path.join(__dirname, 'config', 'config.json')) {
     const fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     const minecraft = fileConfig.minecraft || {};
@@ -88,6 +165,9 @@ function loadConfig(configPath = path.join(__dirname, 'config', 'config.json')) 
             token: process.env.DISCORD_TOKEN || '',
             ownerId: process.env.DISCORD_OWNER_ID || '',
             ownerIds: process.env.DISCORD_OWNER_IDS || '',
+            adminRoleIds: process.env.DISCORD_ADMIN_ROLE_IDS || '',
+            moderatorRoleIds: process.env.DISCORD_MODERATOR_ROLE_IDS || '',
+            viewerRoleIds: process.env.DISCORD_VIEWER_ROLE_IDS || '',
             controlChannelId: process.env.DISCORD_CONTROL_CHANNEL_ID || '',
             configChannelId: process.env.DISCORD_CONFIG_CHANNEL_ID || '',
             notificationChannelId: process.env.DISCORD_NOTIFICATION_CHANNEL_ID || '',
@@ -95,7 +175,8 @@ function loadConfig(configPath = path.join(__dirname, 'config', 'config.json')) 
             defaultEphemeral: process.env.DISCORD_DEFAULT_EPHEMERAL
                 ? process.env.DISCORD_DEFAULT_EPHEMERAL === 'true'
                 : true,
-            liveStatusIntervalMs: Number(process.env.DISCORD_LIVE_STATUS_INTERVAL_MS || 5000)
+            liveStatusIntervalMs: Number(process.env.DISCORD_LIVE_STATUS_INTERVAL_MS || 5000),
+            readyTimeoutMs: Number(process.env.DISCORD_READY_TIMEOUT_MS || 15000)
         },
         skyblock: {
             ...skyblock,
@@ -114,8 +195,13 @@ function validateConfig(config) {
         throw new Error(`Missing Minecraft configuration: ${missing.join(', ')}`);
     }
 
-    if (config.discord.enabled && config.discord.token && !config.discord.ownerId && !config.discord.ownerIds) {
-        throw new Error('DISCORD_OWNER_IDS is required when Discord is enabled.');
+    if (config.discord.enabled) {
+        if (!config.discord.token) {
+            throw new Error('DISCORD_TOKEN is required when Discord is enabled.');
+        }
+        if (!config.discord.ownerId && !config.discord.ownerIds) {
+            throw new Error('DISCORD_OWNER_IDS is required when Discord is enabled.');
+        }
     }
 }
 
@@ -154,15 +240,12 @@ async function startApplication(config = loadConfig()) {
     let reconnectAttempt = 0;
     let connection = null;
     let discordController = null;
+    const modeResumeTracker = createModeResumeTracker();
     const application = { bot: null, framework: null, discordClient: null, stop: null };
-
-    const activeModeName = framework => {
-        const modes = framework.ctx.getManager('mode');
-        return modes.names().find(name => modes.get(name) === modes.current()) || null;
-    };
 
     const closeConnection = async (target, quit = false) => {
         if (!target) return;
+        target.stopModeResumeTracking?.();
         await target.framework.stop();
         target.stopViewer();
         if (quit && target.bot.quit) target.bot.quit('Application stopped');
@@ -187,12 +270,33 @@ async function startApplication(config = loadConfig()) {
 
     const scheduleReconnect = (reason, options = {}) => {
         if (stopping || reconnectTimer || reconnecting) return;
-        const modeToResume = activeModeName(connection.framework);
+        // Prefer the current mode, but retain a process-owned fallback for
+        // the race where a socket kick causes the old Framework to stop the
+        // mode before this reconnect handler reads it.
+        const currentMode = connection.framework.ctx.getManager('mode').current();
+        const modeToResume = currentMode?.isPaused?.()
+            ? null
+            : activeModeName(connection.framework) || modeResumeTracker.get();
+        // A Discord/manual join can be interrupted by a server kick after the
+        // island click. Preserve that intent across the replacement bot so the
+        // new connection logs in once, then resumes SkyBlock joining.
+        const joinWasRequested = connection.framework.ctx
+            .getService('skyblock')
+            ?.isJoinRequested?.() === true;
+        const shouldJoinSkyBlock = Boolean(modeToResume || options.joinSkyblock || joinWasRequested);
         const baseDelay = config.minecraft.reconnectDelayMs ?? 5000;
         const maxDelay = config.minecraft.reconnectMaxDelayMs ?? 60000;
         const retryDelay = Math.min(baseDelay * (2 ** reconnectAttempt), maxDelay);
         const resetWait = resetWaitDelay(new Date(), config.serverReset);
-        const delay = Math.max(options.delayMs ?? retryDelay, resetWait?.delay || 0);
+        // A deliberate Control Panel connect supersedes a passive five-minute
+        // post-kick timer. It still shares the one reconnect lock below, so a
+        // user cannot create two concurrent Mineflayer sockets. Server-reset
+        // protection remains in force unless the privileged caller explicitly
+        // opts out.
+        const requestedDelay = options.delayMs ?? retryDelay;
+        const delay = options.bypassServerResetWait === true
+            ? requestedDelay
+            : Math.max(requestedDelay, resetWait?.delay || 0);
         reconnectAttempt += 1;
         const resetMessage = resetWait
             ? ` Server reset ${String(resetWait.resetHour).padStart(2, '0')}:00; chờ tới sau reset.`
@@ -204,19 +308,24 @@ async function startApplication(config = loadConfig()) {
             try {
                 await closeConnection(connection);
                 connection = await createConnection();
+                // Bind before any Discord/context work. A server can reset the
+                // socket immediately after Mineflayer connects.
+                bindReconnect(connection);
                 application.bot = connection.bot;
                 application.framework = connection.framework;
                 if (discordController) await discordController.updateContext(connection.framework.ctx);
                 application.discordClient = discordController?.client || null;
                 reconnectAttempt = 0;
-                bindReconnect(connection);
-                if (modeToResume || options.joinSkyblock) {
+                if (shouldJoinSkyBlock) {
                     const resumedConnection = connection;
                     const joinAfterReconnect = () => {
-                        resumedConnection.framework.ctx.getService('skyblock').startJoin(options.joinSkyblock ? 'scheduled-reset' : 'reconnect');
+                        const source = options.joinSkyblock
+                            ? 'scheduled-reset'
+                            : joinWasRequested
+                                ? 'reconnect-join'
+                                : 'reconnect';
+                        resumedConnection.framework.ctx.getService('skyblock').startJoin(source);
                     };
-                    if (resumedConnection.framework.runtime.state.bot.connected) joinAfterReconnect();
-                    else resumedConnection.framework.ctx.getManager('events').once(Events.Connection.CONNECTED, joinAfterReconnect);
                     if (modeToResume) resumedConnection.framework.ctx.getManager('events').once(Events.SkyBlock.JOINED, async () => {
                         const delay = modeToResume === 'dungeon'
                             ? (config.dungeon?.reentryDelayMs ?? 300000)
@@ -232,6 +341,10 @@ async function startApplication(config = loadConfig()) {
                         const resumed = await resumedConnection.framework.ctx.getManager('mode').start(modeToResume);
                         resumedConnection.framework.ctx.logger.info(`Đã tiếp tục mode ${modeToResume} sau reconnect: ${resumed}.`);
                     });
+                    // Subscribe before emitting the join workflow. A fast
+                    // server can complete SkyBlock joining in the same turn.
+                    if (resumedConnection.framework.runtime.state.bot.connected) joinAfterReconnect();
+                    else resumedConnection.framework.ctx.getManager('events').once(Events.Connection.CONNECTED, joinAfterReconnect);
                 }
             }
             catch (error) {
@@ -246,19 +359,39 @@ async function startApplication(config = loadConfig()) {
     };
 
     const bindReconnect = target => {
-        target.bot.once('kicked', reason => scheduleReconnect(`kicked: ${String(reason)}`));
+        target.stopModeResumeTracking = bindModeResumeTracker(target.framework, modeResumeTracker);
+        target.bot.once('kicked', reason => {
+            // A Mineflayer "kicked" packet closes the socket even when the
+            // failure happened only during /skyblock. Preserve the distinction:
+            // an interrupted SkyBlock join retries quickly; a stable server
+            // kick waits five minutes to avoid reconnect loops.
+            const skyJoinInProgress = target.framework.ctx
+                .getService('skyblock')
+                ?.isJoinRequested?.() === true;
+            const delayMs = reconnectDelayAfterKick(config, skyJoinInProgress);
+            const scope = skyJoinInProgress ? 'skyblock join kicked' : 'server kicked';
+            scheduleReconnect(`${scope}: ${String(reason)}`, { delayMs });
+        });
         target.bot.once('end', reason => scheduleReconnect(`end: ${reason || 'socketClosed'}`));
         target.bot.once('error', error => scheduleReconnect(`error: ${error?.message || error}`));
     };
 
-    const requestMinecraftConnect = async () => {
+    const requestMinecraftConnect = async (options = {}) => {
         if (stopping || reconnecting) return 'BUSY';
         if (connection?.framework.runtime.state.bot.connected) return 'ALREADY_CONNECTED';
+        const force = options?.force === true;
         if (reconnectTimer) {
+            if (!force) return 'RECONNECT_SCHEDULED';
             clearTimeout(reconnectTimer);
             reconnectTimer = null;
         }
-        scheduleReconnect('Discord connect request', { delayMs: 0 });
+        reconnectAttempt = 0;
+        const source = typeof options?.source === 'string' && options.source.trim()
+            ? options.source.trim()
+            : 'Discord connect request';
+        // The panel is an explicit operator override of the five-minute
+        // post-kick timer. Server-reset protection remains active.
+        scheduleReconnect(source, { delayMs: 0 });
         return 'CONNECTING';
     };
 
@@ -288,6 +421,9 @@ async function startApplication(config = loadConfig()) {
     };
 
     connection = await createConnection();
+    // The Minecraft server may close the socket while Discord is still logging
+    // in, so reconnect listeners must be active before starting Discord.
+    bindReconnect(connection);
     application.bot = connection.bot;
     application.framework = connection.framework;
     if (config.discord.enabled && config.discord.token) {
@@ -295,7 +431,6 @@ async function startApplication(config = loadConfig()) {
         await discordController.start();
         application.discordClient = discordController.client;
     }
-    bindReconnect(connection);
     scheduleServerReset();
 
     const stop = async () => {
@@ -327,4 +462,17 @@ if (require.main === module) {
         });
 }
 
-module.exports = { loadConfig, validateConfig, startApplication, startLiveViewer, resetWaitDelay, nextResetDelay };
+module.exports = {
+    loadConfig,
+    validateConfig,
+    startApplication,
+    startLiveViewer,
+    activeModeName,
+    createModeResumeTracker,
+    bindModeResumeTracker,
+    resetWaitDelay,
+    nextResetDelay,
+    kickReconnectDelayMs,
+    skyJoinKickReconnectDelayMs,
+    reconnectDelayAfterKick
+};

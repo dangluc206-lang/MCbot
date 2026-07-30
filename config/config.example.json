@@ -6,7 +6,9 @@
     "version": "1.21.1",
     "auth": "offline",
     "reconnectDelayMs": 5000,
-    "reconnectMaxDelayMs": 60000
+    "kickReconnectDelayMs": 300000,
+    "reconnectMaxDelayMs": 60000,
+    "commandAfterGuiCloseDelayMs": 6000
   },
   "serverReset": {
     "timeZone": "Asia/Ho_Chi_Minh",
@@ -20,6 +22,105 @@
     "actionBar": false,
     "guiSlots": false,
     "timeZone": "Asia/Ho_Chi_Minh"
+  },
+  "guiProbe": {
+    "windowTimeoutMs": 1000
+  },
+  "crafting": {
+    "command": "/ks",
+    "entrySlot": 16,
+    "entryButton": 0,
+    "targetSlot": 33,
+    "targetCount": 1,
+    "guiTimeoutMs": 5000,
+    "clickIntervalMs": 500,
+    "clickAckTimeoutMs": 3000,
+    "clickAckMaxRetries": 2,
+    "clickAckRetryDelayMs": 1000,
+    "inventoryPressureMaxReplans": 2,
+    "b2BatchSize": 16,
+    "maxActions": 100000,
+    "bulkCraft": {
+      "enabled": false,
+      "finalTargetOnly": true,
+      "minFreeSlots": 18
+    },
+    "shiftCraft": {
+      "enabled": true,
+      "tier2": false,
+      "tier3": false,
+      "tier4Slots": [],
+      "stableMs": 400,
+      "maxReplans": 24
+    },
+    "partialCraft": {
+      "enabled": true
+    },
+    "personalVault": {
+      "enabled": true,
+      "command": "/pv 2",
+      "guiTimeoutMs": 5000,
+      "commandCooldownMs": 5500,
+      "guiRetryAttempts": 1,
+      "transferMode": 1,
+      "transferDelayMs": 250,
+      "reserveInventorySlots": 4,
+      "depositAfterCraft": true,
+      "aliases": {}
+    },
+    "materialAliases": {},
+    "storageMaterialSlots": {
+      "coal": 10,
+      "cobblestone": 12,
+      "diamond": 13,
+      "emerald": 15,
+      "gold_ingot": 20,
+      "iron_ingot": 23,
+      "lapis_lazuli": 28,
+      "raw_gold": 29,
+      "raw_iron": 30,
+      "redstone": 31
+    },
+    "recipes": {
+      "10": { "name": "Siêu đá cuội", "inputs": [{ "item": "cobblestone", "amount": 16 }] },
+      "11": { "name": "Than tinh luyện", "inputs": [{ "item": "coal", "amount": 16 }] },
+      "12": { "name": "Đá đỏ tinh luyện", "inputs": [{ "item": "redstone", "amount": 64 }] },
+      "13": { "name": "Lưu ly tinh luyện", "inputs": [{ "item": "lapis_lazuli", "amount": 64 }] },
+      "14": { "name": "Sắt tinh luyện", "inputs": [{ "item": "iron_ingot", "amount": 64 }] },
+      "15": { "name": "Vàng tinh luyện", "inputs": [{ "item": "gold_ingot", "amount": 64 }] },
+      "16": { "name": "Kim cương tinh luyện", "inputs": [{ "item": "diamond", "amount": 32 }] },
+      "19": { "name": "Ngọc lục bảo tinh luyện", "inputs": [{ "item": "emerald", "amount": 32 }] },
+      "20": { "name": "Khối siêu đá cuội", "inputs": [{ "slot": 10, "amount": 16 }] },
+      "21": { "name": "Khối than tinh luyện", "inputs": [{ "slot": 11, "amount": 16 }] },
+      "22": { "name": "Khối đá đỏ tinh luyện", "inputs": [{ "slot": 12, "amount": 16 }] },
+      "23": { "name": "Khối lưu ly tinh luyện", "inputs": [{ "slot": 13, "amount": 16 }] },
+      "24": { "name": "Khối sắt tinh luyện", "inputs": [{ "slot": 14, "amount": 16 }] },
+      "25": { "name": "Khối vàng tinh luyện", "inputs": [{ "slot": 15, "amount": 16 }] },
+      "28": { "name": "Khối kim cương tinh luyện", "inputs": [{ "slot": 16, "amount": 16 }] },
+      "29": { "name": "Khối ngọc lục bảo tinh luyện", "inputs": [{ "slot": 19, "amount": 16 }] },
+      "30": { "name": "Cacbon", "inputs": [{ "slot": 22, "amount": 8 }, { "slot": 20, "amount": 4 }, { "slot": 21, "amount": 16 }] },
+      "31": { "name": "Titan", "inputs": [{ "slot": 23, "amount": 4 }, { "slot": 24, "amount": 16 }, { "slot": 25, "amount": 8 }, { "slot": 29, "amount": 2 }] },
+      "32": { "name": "Volfram", "inputs": [{ "slot": 20, "amount": 2 }, { "slot": 28, "amount": 16 }, { "slot": 29, "amount": 4 }, { "slot": 24, "amount": 8 }, { "slot": 25, "amount": 8 }] },
+      "33": { "name": "Siêu Hợp Kim", "inputs": [{ "slot": 32, "amount": 8 }, { "slot": 31, "amount": 16 }, { "slot": 30, "amount": 32 }] }
+    }
+  },
+  "collector": {
+    "pickupPosition": { "x": -23996.7, "y": 100, "z": 19207.3 },
+    "pickupRange": 1,
+    "pickupTimeoutMs": 60000,
+    "positionCheckIntervalMs": 10000,
+    "storageGuiCheckIntervalMs": 30000,
+    "guiFailureBackoffMs": 30000,
+    "afterSellGuiCheckDelayMs": 30000,
+    "postCraftSellOres": [
+      "DIAMOND", "DIAMOND_BLOCK",
+      "EMERALD", "EMERALD_BLOCK",
+      "LAPIS_LAZULI", "LAPIS_BLOCK"
+    ],
+    "postCraftSellMinimumAmount": 64,
+    "superAlloyEnabled": true,
+    "superAlloyIntervalMs": 3600000,
+    "superAlloyRetryIntervalMs": 120000
   },
   "viewer": {
     "enabled": true,
@@ -40,7 +141,11 @@
     "islandClickAttempts": 3,
     "loginTimeoutMs": 15000,
     "guiTimeoutMs": 10000,
-    "joinTimeoutMs": 15000
+    "joinTimeoutMs": 15000,
+    "joinRetryDelayMs": 5000,
+    "leaveDetectionDelayMs": 1500,
+    "leaveRecoveryDelayMs": 5000,
+    "leaveCheckIntervalMs": 5000
   },
   "dungeon": {
     "command": "/d",
@@ -57,6 +162,8 @@
     "spawnPatterns": ["spawn"],
     "spawnPosition": null,
     "spawnRadius": 8,
+    "reenterOnUnexpectedForcedMove": true,
+    "unexpectedTeleportMinDistance": 12,
     "storageCommand": "/pv 2",
     "eatHealthBelow": 12,
     "eatFoodBelow": 12,
@@ -68,7 +175,63 @@
   "storage": {
     "guiCommand": "/kho",
     "guiTimeoutMs": 5000,
-    "guiCheckIntervalMs": 30000,
+    "guiRetryAttempts": 1,
+    "guiRetryDelayMs": 1000,
+    "guiCheckIntervalMs": 300000,
+    "guiDebug": false,
+    "guiLog": false,
+    "detailSlot": 49,
+    "autoSellFreeThreshold": 150000,
+    "afterSellGuiCheckDelayMs": 300000,
+    "smelting": {
+      "enabled": true,
+      "command": "/ks",
+      "menuSlot": 12,
+      "menuButton": 0,
+      "actionSlot": 1,
+      "actionButton": 0,
+      "passes": 2,
+      "guiTimeoutMs": 5000,
+      "actionDelayMs": 1000
+    },
+    "conversion": {
+      "enabled": true,
+      "command": "/ks",
+      "menuSlot": 10,
+      "menuButton": 0,
+      "guiTimeoutMs": 5000,
+      "clickDelayMs": 1000,
+      "packAfterStorageRead": true,
+      "unpackBeforeCraft": true,
+      "targetItems": ["coal", "redstone", "lapis_lazuli", "iron_ingot", "gold_ingot", "diamond", "emerald"],
+      "rawSlots": {
+        "coal": 10,
+        "redstone": 31,
+        "lapis_lazuli": 28,
+        "iron_ingot": 23,
+        "gold_ingot": 20,
+        "diamond": 13,
+        "emerald": 15
+      },
+      "blockSlots": {
+        "coal": 11,
+        "redstone": 32,
+        "lapis_lazuli": 25,
+        "iron_ingot": 22,
+        "gold_ingot": 19,
+        "diamond": 14,
+        "emerald": 16
+      },
+      "blockItems": {
+        "coal": "coal_block",
+        "redstone": "redstone_block",
+        "lapis_lazuli": "lapis_block",
+        "iron_ingot": "iron_block",
+        "gold_ingot": "gold_block",
+        "diamond": "diamond_block",
+        "emerald": "emerald_block"
+      }
+    },
     "sellCommand": "/kho sell",
     "sellCommandDelayMs": 350,
     "mine": ["coal_ore", "iron_ore"],

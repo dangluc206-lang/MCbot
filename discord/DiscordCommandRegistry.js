@@ -18,9 +18,9 @@ class DiscordCommandRegistry {
         return this;
     }
 
-    registerButton(customId, handler) { this.buttons.set(customId, handler); return this; }
-    registerSelect(customId, handler) { this.selects.set(customId, handler); return this; }
-    registerModal(customId, handler) { this.modals.set(customId, handler); return this; }
+    registerButton(customId, handler) { return this._registerComponent(this.buttons, 'button', customId, handler); }
+    registerSelect(customId, handler) { return this._registerComponent(this.selects, 'select menu', customId, handler); }
+    registerModal(customId, handler) { return this._registerComponent(this.modals, 'modal', customId, handler); }
     registerButtonMatcher(match, handler) { this.buttonMatchers.push({ match, handler }); return this; }
     component(type, customId) {
         const handler = this[type].get(customId);
@@ -29,6 +29,17 @@ class DiscordCommandRegistry {
     }
     command(name) { return this.commands.get(name) || null; }
     slashData() { return [...this.commands.values()].map(command => command.data.toJSON()); }
+
+    _registerComponent(collection, type, customId, handler) {
+        if (!customId || typeof customId !== 'string' || !handler || typeof handler.execute !== 'function') {
+            throw new Error(`Invalid Discord ${type} handler contract.`);
+        }
+        if (collection.has(customId)) {
+            throw new Error(`Discord ${type} "${customId}" already registered.`);
+        }
+        collection.set(customId, handler);
+        return this;
+    }
 }
 
 module.exports = DiscordCommandRegistry;

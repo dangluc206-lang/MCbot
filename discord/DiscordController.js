@@ -1,6 +1,7 @@
 'use strict';
 
 const { Client, Events: DiscordEvents, GatewayIntentBits } = require('discord.js');
+const Result = require('../core/constants/Result');
 const DiscordCommandRegistry = require('./DiscordCommandRegistry');
 const DiscordInteractionRouter = require('./DiscordInteractionRouter');
 const DiscordPermissionManager = require('./DiscordPermissionManager');
@@ -17,6 +18,8 @@ const panelCommand = require('./commands/system/panel.command');
 const modeCommand = require('./commands/mode/mode.command');
 const chatCommand = require('./commands/minecraft/chat.command');
 const minecraftCommand = require('./commands/minecraft/command.command');
+const guiProbeCommand = require('./commands/minecraft/gui-probe.command');
+const personalVaultAuditCommand = require('./commands/minecraft/pv-audit.command');
 const positionCommand = require('./commands/minecraft/position.command');
 const healthCommand = require('./commands/minecraft/health.command');
 const playersCommand = require('./commands/minecraft/players.command');
@@ -50,7 +53,7 @@ const configHandlers = require('./components/buttons/config-panel.handlers');
 
 /** Discord-facing controller; Minecraft behavior stays behind Context services/managers. */
 class DiscordController {
-    constructor(ctx) {
+    constructor(ctx, options = {}) {
         if (!ctx) throw new Error('DiscordController requires Context.');
         this.ctx = ctx;
         this.client = null;
@@ -58,15 +61,26 @@ class DiscordController {
         this.registry = new DiscordCommandRegistry();
         this.inventorySessions = new InventorySessionManager();
         this.confirmations = new ConfirmationManager();
-        this.permissions = new DiscordPermissionManager(ctx.config.discord || {});
+        this.permissions = new DiscordPermissionManager(ctx.config?.discord || {});
         this.cooldown = new Cooldown();
+        this.createClient = options.createClient || (() => new Client({ intents: [GatewayIntentBits.Guilds] }));
+        this.readyTimeoutMs = Math.min(Math.max(
+            Number(options.readyTimeoutMs ?? ctx.config?.discord?.readyTimeoutMs) || 15000,
+            1000
+        ), 120000);
         this.router = new DiscordInteractionRouter({
             getContext: () => this.ctx,
             registry: this.registry,
             permissions: this.permissions,
             cooldown: this.cooldown
         });
-        this.boundInteraction = interaction => this.router.handle(interaction);
+        this.boundInteraction = interaction => {
+            this.router.handle(interaction).catch(error => {
+                this.ctx.errorHandler?.handle(error, { phase: 'discord.interaction-event' });
+            });
+        };
+        this.boundClientError = error => this.ctx.errorHandler?.handle(error, { phase: 'discord.client' });
+        this.cancelReadyWait = null;
         this.notifications = null;
         this.controlPanel = null;
         this.configPanel = null;
@@ -74,7 +88,7 @@ class DiscordController {
     }
 
     loadContracts() {
-        [pingCommand, helpCommand, statusCommand, panelCommand, startCommand, stopCommand, restartCommand, shutdownCommand, modeCommand, chatCommand, minecraftCommand, positionCommand, healthCommand, playersCommand, reconnectCommand, gotoCommand, followCommand, lookCommand, jumpCommand, movementStopCommand, inventoryCommand, useCommand, equipCommand, swapCommand, dropCommand, logsCommand, errorsCommand, warningsCommand, configCommand, viewCommand, viewerCommand].forEach(command => this.registry.register(command));
+        [pingCommand, helpCommand, statusCommand, panelCommand, startCommand, stopCommand, restartCommand, shutdownCommand, modeCommand, chatCommand, minecraftCommand, guiProbeCommand, personalVaultAuditCommand, positionCommand, healthCommand, playersCommand, reconnectCommand, gotoCommand, followCommand, lookCommand, jumpCommand, movementStopCommand, inventoryCommand, useCommand, equipCommand, swapCommand, dropCommand, logsCommand, errorsCommand, warningsCommand, configCommand, viewCommand, viewerCommand].forEach(command => this.registry.register(command));
         for (const [customId, handler] of dashboardButton.handlers) this.registry.registerButton(customId, handler);
         for (const [customId, handler] of dashboardButton.selects) this.registry.registerSelect(customId, handler);
         for (const [customId, handler] of shutdownButtons) this.registry.registerButton(customId, handler);
@@ -83,7 +97,7 @@ class DiscordController {
         for (const [customId, handler] of configHandlers.modals) this.registry.registerModal(customId, handler);
         for (const [customId, handler] of configHandlers.selects) this.registry.registerSelect(customId, handler);
         for (const [customId, handler] of controlPanel.handlers) this.registry.registerButton(customId, handler);
-        this.registry.registerSelect(...controlPanel.select);
+        for (const [customId, handler] of controlPanel.select) this.registry.registerSelect(customId, handler);
         this.registry.registerButtonMatcher(id => /^inventory:(prev|next|refresh|close):[a-z0-9]+$/.test(id), inventoryCommand.componentHandler);
         this.registry.registerButtonMatcher(id => /^confirm:(drop|cancel):[a-z0-9]+$/.test(id), dropCommand.componentHandler);
     }
@@ -91,7 +105,9 @@ class DiscordController {
     async updateContext(ctx) {
         if (!ctx) throw new Error('DiscordController requires a valid Context.');
         this.notifications?.stop();
+        if (this.ctx.discordController === this) this.ctx.discordController = null;
         this.ctx = ctx;
+        this.permissions = new DiscordPermissionManager(ctx.config?.discord || {});
         ctx.discordController = this;
         this.controlPanel?.updateContext(ctx);
         this.configPanel?.updateContext(ctx);
@@ -106,32 +122,43 @@ class DiscordController {
     }
 
     async start() {
-        if (this.started) return;
-        const token = this.ctx.config.discord?.token;
+        if (this.started) return Result.NO_ACTION;
+        if (this.ctx.config?.discord?.enabled === false) return Result.NO_ACTION;
+        const token = this.ctx.config?.discord?.token;
         if (!token) throw new Error('Discord token is required when Discord is enabled.');
-        this.ctx.discordController = this;
-        this.client = new Client({ intents: [GatewayIntentBits.Guilds] });
-        this.client.mcbotController = this;
-        const ready = new Promise(resolve => this.client.once(DiscordEvents.ClientReady, client => {
-            this.ctx.logger?.success(`[DiscordController] Online as ${client.user.tag}.`);
-            resolve();
-        }));
-        this.client.on(DiscordEvents.InteractionCreate, this.boundInteraction);
-        this.client.on(DiscordEvents.Error, error => this.ctx.errorHandler?.handle(error, { phase: 'discord.client' }));
-        await this.client.login(token);
-        await ready;
-        this.notifications = new DiscordNotificationService(this.ctx, this.client);
-        await this.notifications.start();
-        this.controlPanel = new ControlPanelManager(this.ctx, this.client);
-        await this.controlPanel.start();
-        this.configPanel = new ConfigPanelManager(this.ctx, this.client);
-        await this.configPanel.start();
-        this.started = true;
+        try {
+            this.ctx.discordController = this;
+            this.client = this.createClient();
+            if (!this.client) throw new Error('Discord client factory did not return a client.');
+            this.client.mcbotController = this;
+            this.client.on(DiscordEvents.InteractionCreate, this.boundInteraction);
+            this.client.on(DiscordEvents.Error, this.boundClientError);
+
+            const ready = this._waitUntilReady();
+            await this.client.login(token);
+            await ready;
+
+            this.notifications = new DiscordNotificationService(this.ctx, this.client);
+            await this.notifications.start();
+            this.controlPanel = new ControlPanelManager(this.ctx, this.client);
+            await this.controlPanel.start();
+            this.configPanel = new ConfigPanelManager(this.ctx, this.client);
+            await this.configPanel.start();
+            this.started = true;
+            return Result.SUCCESS;
+        } catch (error) {
+            await this.stop();
+            throw error;
+        }
     }
 
     async stop() {
-        if (!this.started) return;
+        const hadResources = this.started || this.client || this.notifications || this.controlPanel || this.configPanel;
+        if (!hadResources) return Result.NO_ACTION;
+        this.cancelReadyWait?.();
+        this.cancelReadyWait = null;
         this.client?.removeListener(DiscordEvents.InteractionCreate, this.boundInteraction);
+        this.client?.removeListener(DiscordEvents.Error, this.boundClientError);
         this.cooldown.clear();
         this.inventorySessions.clear();
         this.confirmations.clear();
@@ -144,7 +171,47 @@ class DiscordController {
         this.client?.destroy();
         if (this.client) this.client.mcbotController = null;
         this.client = null;
+        if (this.ctx.discordController === this) this.ctx.discordController = null;
         this.started = false;
+        return Result.SUCCESS;
+    }
+
+    /**
+     * Waits for the current Discord client with an explicit timeout and cleans
+     * temporary listeners regardless of ready, error, or shutdown.
+     *
+     * @returns {Promise<*>}
+     * @private
+     */
+    _waitUntilReady() {
+        const client = this.client;
+        return new Promise((resolve, reject) => {
+            let timer;
+            const cleanup = () => {
+                clearTimeout(timer);
+                client.off?.(DiscordEvents.ClientReady, onReady);
+                client.off?.(DiscordEvents.Error, onError);
+                this.cancelReadyWait = null;
+            };
+            const finish = (callback, value) => {
+                cleanup();
+                callback(value);
+            };
+            const onReady = readyClient => {
+                this.ctx.logger?.success?.(`[DiscordController] Online as ${readyClient.user?.tag || 'unknown user'}.`);
+                finish(resolve, readyClient);
+            };
+            const onError = error => finish(reject, error);
+
+            client.once(DiscordEvents.ClientReady, onReady);
+            client.once(DiscordEvents.Error, onError);
+            timer = setTimeout(() => {
+                finish(reject, new Error(`Discord client did not become ready within ${this.readyTimeoutMs} ms.`));
+            }, this.readyTimeoutMs);
+            this.cancelReadyWait = () => {
+                finish(reject, new Error('Discord controller stopped before the client became ready.'));
+            };
+        });
     }
 }
 

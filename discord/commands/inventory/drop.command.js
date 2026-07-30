@@ -22,13 +22,14 @@ module.exports = {
         permission: Permission.OWNER,
         cooldown: 2,
         minecraftRequired: true,
+        defer: true,
         async execute(ctx, interaction) {
             const [, operation, id] = interaction.customId.split(':');
             const action = ctx.discordController.confirmations.take(id, interaction.user.id);
             if (!action) return DiscordResponse.error(interaction, 'Xác nhận đã hết hạn hoặc không thuộc về bạn.', true);
-            if (operation === 'cancel') return interaction.update({ content: 'Đã hủy thao tác.', components: [] });
+            if (operation === 'cancel') return interaction.editReply({ content: 'Đã hủy thao tác.', components: [] });
             const result = await ctx.getService('inventory').drop(action.slot, action.amount);
-            return interaction.update({ content: `Drop item: ${result}`, components: [] });
+            return interaction.editReply({ content: `Drop item: ${result}`, components: [] });
         }
     }
 };

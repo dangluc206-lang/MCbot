@@ -3,15 +3,20 @@
 const {
     CollectorService,
     ChatService,
+    CraftingService,
     ConfigurationService,
     DungeonService,
     FishingService,
     GUIService,
+    GuiProbeService,
     InventoryService,
     MiningService,
+    MaterialConversionService,
     MovementService,
+    PersonalVaultService,
     PlayerService,
     SkyBlockService,
+    SmeltingService,
     StorageService,
     ViewService
 } = require('../services');
@@ -39,6 +44,11 @@ module.exports = function registerServices(ctx) {
     );
 
     ctx.registerService(
+        'crafting',
+        new CraftingService(ctx)
+    );
+
+    ctx.registerService(
         'player',
         new PlayerService(ctx)
     );
@@ -54,8 +64,18 @@ module.exports = function registerServices(ctx) {
     );
 
     ctx.registerService(
+        'personalVault',
+        new PersonalVaultService(ctx)
+    );
+
+    ctx.registerService(
         'gui',
         new GUIService(ctx)
+    );
+
+    ctx.registerService(
+        'guiProbe',
+        new GuiProbeService(ctx)
     );
 
     ctx.registerService(
@@ -66,6 +86,16 @@ module.exports = function registerServices(ctx) {
     ctx.registerService(
         'storage',
         new StorageService(ctx)
+    );
+
+    ctx.registerService(
+        'smelting',
+        new SmeltingService(ctx)
+    );
+
+    ctx.registerService(
+        'materialConversion',
+        new MaterialConversionService(ctx)
     );
 
     ctx.registerService(

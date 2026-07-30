@@ -37,7 +37,10 @@ const componentHandler = {
         if (action === 'prev') session.page -= 1;
         if (action === 'next') session.page += 1;
         if (action === 'refresh') session.items = ctx.getService('inventory').getItems();
-        if (action === 'close') return interaction.update({ content: 'Đã đóng inventory.', embeds: [], components: [] });
+        if (action === 'close') {
+            ctx.discordController.inventorySessions.remove(sessionId);
+            return interaction.update({ content: 'Đã đóng inventory.', embeds: [], components: [] });
+        }
         return interaction.update(payload(sessionId, session));
     }
 };

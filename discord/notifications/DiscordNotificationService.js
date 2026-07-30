@@ -10,8 +10,8 @@ class DiscordNotificationService {
     constructor(ctx, client) {
         this.ctx = ctx;
         this.client = client;
-        this.channelId = process.env.DISCORD_NOTIFICATION_CHANNEL_ID || ctx.config.discord?.notificationChannelId || '';
-        this.errorChannelId = process.env.DISCORD_ERROR_CHANNEL_ID || ctx.config.discord?.errorChannelId || '';
+        this.channelId = ctx.config.discord?.notificationChannelId || '';
+        this.errorChannelId = ctx.config.discord?.errorChannelId || '';
         this.bindings = [];
         this.recent = new Map();
         this.channel = null;
@@ -19,9 +19,11 @@ class DiscordNotificationService {
     }
 
     async start() {
-        if (!this.channelId) return;
-        this.channel = await this.client.channels.fetch(this.channelId);
-        if (!this.channel?.isTextBased?.()) throw new Error('Discord notification channel is not text based.');
+        if (!this.channelId && !this.errorChannelId) return;
+        if (this.channelId) {
+            this.channel = await this.client.channels.fetch(this.channelId);
+            if (!this.channel?.isTextBased?.()) throw new Error('Discord notification channel is not text based.');
+        }
         if (this.errorChannelId) {
             this.errorChannel = await this.client.channels.fetch(this.errorChannelId);
             if (!this.errorChannel?.isTextBased?.()) throw new Error('Discord error channel is not text based.');

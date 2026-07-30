@@ -2,7 +2,6 @@
 
 const BaseListener = require('../core/base/BaseListener');
 const Result = require('../core/constants/Result');
-const Events = require('../core/constants/Events');
 
 /**
  * ============================================================================
@@ -12,12 +11,12 @@ const Events = require('../core/constants/Events');
  * Đồng bộ Inventory từ Mineflayer vào Runtime.
  *
  * Trách nhiệm:
- * - Cập nhật Runtime.
- * - Emit Framework Event.
+ * - Chuyển Mineflayer event sang InventoryService.
+ * - Cập nhật metadata runtime của hotbar/tay cầm.
  *
  * Không:
  * - Không xử lý nghiệp vụ.
- * - Không gọi Service.
+ * - Không chứa logic inventory riêng.
  * - Không gọi Mode.
  *
  * ============================================================================
@@ -47,6 +46,12 @@ class InventoryListener extends BaseListener {
             () => this.syncInventory()
         );
 
+        this.bind(
+            this.bot,
+            'spawn',
+            () => this.syncInventory()
+        );
+
         return Result.SUCCESS;
     }
 
@@ -55,32 +60,19 @@ class InventoryListener extends BaseListener {
      */
     syncInventory() {
 
-        const items = this.bot.inventory.items();
+        // InventoryService is the only writer for normalized items. Its
+        // snapshot includes hotbar slots and custom item labels. Writing raw
+        // Mineflayer items here used to overwrite that data after /pv or a
+        // crafting window update.
+        const inventory = this.service('inventory');
+        if (!inventory?.sync) return Result.FAILED;
+        const result = inventory.sync();
+        if (result !== Result.SUCCESS) return result;
 
-        this.state.inventory.items = items;
         this.state.inventory.selectedSlot = this.bot.quickBarSlot;
-
         this.state.inventory.heldItem =
             this.bot.heldItem ?? null;
-
-        this.state.inventory.emptySlots =
-            this.bot.inventory.emptySlotCount();
-
-        this.state.inventory.full =
-            this.state.inventory.emptySlots === 0;
-
-        this.emit(
-            Events.Inventory.UPDATE,
-            items
-        );
-
-        if (this.state.inventory.full) {
-            this.emit(Events.Inventory.FULL);
-        }
-
-        if (items.length === 0) {
-            this.emit(Events.Inventory.EMPTY);
-        }
+        return Result.SUCCESS;
 
     }
 

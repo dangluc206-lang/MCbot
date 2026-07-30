@@ -38,6 +38,20 @@ class FishingMode extends BaseMode {
         return this.service('fishing').tick();
     }
 
+    async recover() {
+        const skyblock = this.service('skyblock');
+        const joined = await skyblock.ensureJoined();
+        if (joined !== Result.SUCCESS && joined !== Result.ALREADY_DONE) return joined;
+
+        // AFK state is tied to the server location. Re-open /afk rather than
+        // resuming an old fishing target after being removed from SkyBlock.
+        const fishing = this.service('fishing');
+        await fishing.stop();
+        const restarted = await fishing.start();
+        if (restarted === Result.SUCCESS || restarted === Result.ALREADY_DONE) this.clearRecovery();
+        return restarted;
+    }
+
     async pause() {
         const result = await super.pause();
         if (result !== Result.SUCCESS) return result;

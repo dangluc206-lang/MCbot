@@ -39,9 +39,20 @@ class SkyBlockService extends BaseService {
         this.loginTimeout = 15000;
         this.joinTimeout = 15000;
         this.workflowTask = null;
+        this.loginTask = null;
+        this.loginAttemptedForConnection = false;
+        // Incremented for every socket lifecycle. Delayed login work keeps a
+        // copy so a disconnected socket cannot send `/login` later.
+        this.connectionGeneration = 0;
+        this.joinRequested = false;
+        this.connectionFailureHandled = false;
         this.islandVisitTask = null;
         this.cancelled = false;
         this.postIslandDiagnostics = null;
+        this.leaveCheckTimer = null;
+        this.leaveRecoveryTimer = null;
+        this.joinNotBefore = 0;
+        this.leaveMonitorTimer = null;
     }
 
 
@@ -55,6 +66,7 @@ class SkyBlockService extends BaseService {
         await super.initialize();
 
         this.bindEvents();
+        this.startLeaveMonitor();
         this.setWorkflow('WAIT_CONNECTION', 'waiting', 'Đang chờ kết nối tới Minecraft server.');
 
         return Result.SUCCESS;
@@ -73,7 +85,12 @@ class SkyBlockService extends BaseService {
 
 
         this.bind(this.bot, 'resourcePack', () => this.acceptResourcePack());
+        this.bind(this.bot, 'login', () => this.onMinecraftConnected());
         this.bind(this.bot, 'spawn', () => this.onSpawn());
+        this.bind(this.bot, 'forcedMove', () => this.scheduleLeaveCheck('server teleport'));
+        this.bind(this.bot, 'respawn', () => this.scheduleLeaveCheck('respawn'));
+        this.bind(this.bot, 'scoreboardPosition', () => this.scheduleLeaveCheck('scoreboard update'));
+        this.bind(this.bot, 'scoreboardTitleChanged', () => this.scheduleLeaveCheck('scoreboard title update'));
         this.bind(this.bot, 'kicked', reason => this.connectionFailed(
             'CONNECTION_FAILED',
             `Bot bị kick: ${this.formatServerReason(reason)}`
@@ -118,7 +135,19 @@ class SkyBlockService extends BaseService {
     }
 
     connectionFailed(step, message, error = null) {
+        // Mineflayer normally emits kicked/error and then end for the same
+        // socket loss. Keep the first, useful reason instead of overwriting it
+        // with a second noisy CONNECTION_ENDED entry.
+        if (this.connectionFailureHandled) return;
+        this.connectionFailureHandled = true;
         this.cancelled = true;
+        this.connectionGeneration += 1;
+        // `error` is emitted before `end` for a timed-out socket. Make the
+        // runtime offline immediately so modes cannot start a stale join.
+        this.state.bot.connected = false;
+        this.loginTask = null;
+        this.loginAttemptedForConnection = false;
+        this.clearLeaveRecovery();
         this.state.skyblock.joined = false;
         this.state.skyblock.loggedIn = false;
         this.state.skyblock.islandReady = false;
@@ -133,6 +162,11 @@ class SkyBlockService extends BaseService {
 
     status() {
         return { ...this.state.skyblock.workflow, joined: this.state.skyblock.joined };
+    }
+
+    /** True only while an explicit SkyBlock workflow is expected to finish. */
+    isJoinRequested() {
+        return this.joinRequested;
     }
 
     acceptResourcePack() {
@@ -158,10 +192,89 @@ class SkyBlockService extends BaseService {
             this.setWorkflow('WAIT_RESOURCE_PACK', 'complete', 'Resource Pack đã hoàn tất; bot đã spawn.');
         }
 
+        // /login belongs to the Minecraft connection lifecycle, never to an
+        // individual SkyBlock attempt. A retry below must only resend
+        // /skyblock and GUI clicks.
+        this.startConnectionLogin('spawn').catch(error => this.error(error));
+
         if (this.configForWorkflow().autoJoinOnSpawn === true &&
             !this.state.skyblock.joined && !this.workflowTask) {
             this.startJoin('auto').catch(error => this.error(error));
         }
+    }
+
+    /** Resets per-connection login state after Mineflayer establishes TCP/login. */
+    onMinecraftConnected() {
+        this.connectionGeneration += 1;
+        this.cancelled = false;
+        this.connectionFailureHandled = false;
+        this.clearLeaveRecovery();
+        this.loginTask = null;
+        this.loginAttemptedForConnection = false;
+        this.state.skyblock.loggedIn = false;
+        this.state.skyblock.joined = false;
+        this.state.skyblock.islandReady = false;
+    }
+
+    /**
+     * Sends /login once for the current Minecraft connection. It is invoked
+     * from spawn and can be awaited by a SkyBlock workflow, but never repeats
+     * merely because joining SkyBlock needs another attempt.
+     */
+    async startConnectionLogin(source = 'connection', overrides = {}) {
+        // Login is allowed only from a fresh Mineflayer `spawn`. SkyBlock
+        // join, retries and ensureJoined() may wait for it, but never send it.
+        if (source !== 'spawn') return Result.NO_ACTION;
+        if (!this.state.bot.connected) return Result.NOT_CONNECTED;
+        if (this.isLoggedIn()) return Result.ALREADY_DONE;
+        if (this.loginTask) return this.loginTask;
+        if (this.loginAttemptedForConnection) return Result.NOT_LOGGED_IN;
+
+        const connectionGeneration = this.connectionGeneration;
+        this.loginAttemptedForConnection = true;
+        this.loginTask = (async () => {
+            const settings = { ...this.configForWorkflow(), ...overrides };
+            const password = settings.loginPassword;
+            if (!password) {
+                if (!this.isCurrentConnection(connectionGeneration)) return Result.DISCONNECTED;
+                this.state.skyblock.loggedIn = true;
+                this.state.skyblock.lastLogin = Date.now();
+                this.emit(Events.SkyBlock.LOGGED);
+                this.setWorkflow('LOGIN', 'skipped', 'Không có SKYBLOCK_LOGIN_PASSWORD; bỏ qua /login.');
+                return Result.SUCCESS;
+            }
+
+            await this.delay(settings.afterSpawnDelayMs ?? 1000);
+            if (!this.isCurrentConnection(connectionGeneration)) return Result.DISCONNECTED;
+            this.setWorkflow('LOGIN', 'running', `Đang gửi /login (${source}).`);
+            const sent = await this.service('chat').sendCommand(`/login ${password}`);
+            if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi /login: ${sent}.`);
+            this.setWorkflow('WAIT_LOGIN', 'waiting', 'Đang chờ server xác nhận login thành công.');
+            await this.waitForLoggedIn(settings.loginTimeoutMs ?? this.loginTimeout);
+            this.setWorkflow('WAIT_LOGIN', 'complete', 'Server đã xác nhận login thành công.');
+            await this.delay(settings.afterLoginDelayMs ?? 1000);
+            return Result.SUCCESS;
+        })().catch(error => {
+            if (this.cancelled || !this.state.bot.connected) return Result.DISCONNECTED;
+            this.setWorkflow('WAIT_LOGIN', 'failed', `Login Minecraft thất bại: ${error.message}`, error);
+            return Result.FAILED;
+        });
+
+        return this.loginTask;
+    }
+
+    isCurrentConnection(connectionGeneration) {
+        return !this.cancelled &&
+            this.state.bot.connected === true &&
+            this.connectionGeneration === connectionGeneration;
+    }
+
+    async waitForLifecycleLogin(settings = this.configForWorkflow()) {
+        if (this.isLoggedIn()) return Result.SUCCESS;
+        // Deliberately wait only. `/login` is initiated once by onSpawn(),
+        // never by a SkyBlock join or retry workflow.
+        await this.waitForLoggedIn(settings.loginTimeoutMs ?? this.loginTimeout);
+        return this.isLoggedIn() ? Result.SUCCESS : Result.NOT_LOGGED_IN;
     }
 
 
@@ -209,6 +322,7 @@ class SkyBlockService extends BaseService {
     confirmJoined(message) {
         if (this.state.skyblock.joined) return;
 
+        this.clearLeaveRecovery();
         this.state.skyblock.joined = true;
         this.state.skyblock.islandReady = false;
         this.setWorkflow('VERIFY_SKYBLOCK', 'complete', message);
@@ -268,12 +382,7 @@ class SkyBlockService extends BaseService {
             );
 
 
-            this.bot.chat(
-                '/skyblock'
-            );
-
-
-            return Result.SUCCESS;
+            return this.service('chat').sendCommand('/skyblock');
 
         }
         catch (error) {
@@ -291,18 +400,29 @@ class SkyBlockService extends BaseService {
             return Result.ALREADY_DONE;
         }
 
+        // A forced return from SkyBlock must cool down before an automatic
+        // retry. An explicit operator action may still start immediately.
+        if (Date.now() < this.joinNotBefore && !this.isManualJoinSource(source)) {
+            return Result.PENDING;
+        }
+
         if (this.workflowTask) {
             return Result.BUSY;
         }
 
         this.cancelled = false;
+        this.joinRequested = true;
         this.state.skyblock.workflow.startedAt = Date.now();
         this.workflowTask = this.runJoinWorkflow(source, overrides)
             .catch(error => {
+                if (this.cancelled || !this.state.bot.connected) return Result.DISCONNECTED;
                 this.setWorkflow(this.state.skyblock.workflow.step, 'failed', error.message, error);
                 return Result.FAILED;
             })
-            .finally(() => { this.workflowTask = null; });
+            .finally(() => {
+                this.workflowTask = null;
+                this.joinRequested = false;
+            });
 
         return Result.PENDING;
     }
@@ -310,31 +430,48 @@ class SkyBlockService extends BaseService {
     async runJoinWorkflow(source, overrides = {}) {
         const settings = { ...this.configForWorkflow(), ...overrides };
         const gui = this.service('gui');
-        const password = settings.loginPassword || process.env.SKYBLOCK_LOGIN_PASSWORD;
 
         if (!this.state.bot.connected) {
-            throw new Error('Bot chưa kết nối tới server.');
+            this.setWorkflow('WAIT_CONNECTION', 'waiting', 'Đang chờ Minecraft kết nối trước khi vào SkyBlock.');
+            await this.waitForConnection(settings.connectionTimeoutMs ?? 30000);
         }
 
         this.setWorkflow('BOT_CONNECTED', 'complete', `Bot đã kết nối (khởi chạy: ${source}).`);
-        await this.delay(settings.afterSpawnDelayMs ?? 1000);
-        this.throwIfCancelled();
-
-        if (password) {
-            this.setWorkflow('LOGIN', 'running', 'Đang gửi /login.');
-            this.bot.chat(`/login ${password}`);
-            this.setWorkflow('WAIT_LOGIN', 'waiting', 'Đang chờ server xác nhận login thành công.');
-            await this.waitForLoggedIn(settings.loginTimeoutMs ?? this.loginTimeout);
-            this.setWorkflow('WAIT_LOGIN', 'complete', 'Server đã xác nhận login thành công.');
-            await this.delay(settings.afterLoginDelayMs ?? 1000);
-        } else {
-            this.state.skyblock.loggedIn = true;
-            this.setWorkflow('LOGIN', 'skipped', 'Không có SKYBLOCK_LOGIN_PASSWORD; bỏ qua /login.');
+        const loginResult = await this.waitForLifecycleLogin(settings);
+        if (loginResult !== Result.SUCCESS && loginResult !== Result.ALREADY_DONE) {
+            throw new Error(`Minecraft chưa login: ${loginResult}.`);
         }
 
+        let attempt = 0;
+        while (!this.isJoined()) {
+            this.throwIfCancelled();
+            attempt += 1;
+            try {
+                await this.runJoinAttempt(gui, settings, attempt);
+                return Result.SUCCESS;
+            } catch (error) {
+                this.throwIfCancelled();
+                if (!this.state.bot.connected) throw error;
+
+                const retryDelay = this.joinRetryDelayMs(settings);
+                this.setWorkflow(
+                    'RETRY_SKYBLOCK_JOIN',
+                    'waiting',
+                    `Lần ${attempt} chưa vào được SkyBlock (${error.message}); thử lại sau ${Math.ceil(retryDelay / 1000)} giây. Không gửi lại /login.`
+                );
+                await this.closeJoinWindow(gui);
+                await this.delay(retryDelay);
+            }
+        }
+        return Result.SUCCESS;
+    }
+
+    /** Executes exactly one /skyblock → server → island GUI attempt. */
+    async runJoinAttempt(gui, settings, attempt) {
         this.throwIfCancelled();
-        this.setWorkflow('OPEN_SKYBLOCK_MENU', 'running', 'Đang gửi /skyblock.');
-        this.bot.chat('/skyblock');
+        this.setWorkflow('OPEN_SKYBLOCK_MENU', 'running', `Đang gửi /skyblock (lần ${attempt}).`);
+        const sent = await this.service('chat').sendCommand('/skyblock');
+        if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi /skyblock: ${sent}.`);
         const firstWindow = await this.waitForWindow(gui, null, settings.guiTimeoutMs ?? 10000);
         this.setWorkflow('SKYBLOCK_MENU_OPEN', 'complete', this.describeWindow(firstWindow, settings.serverSlot ?? 12));
 
@@ -352,9 +489,39 @@ class SkyBlockService extends BaseService {
         await this.selectIsland(gui, secondWindow, settings.islandSlot ?? 19, settings.islandClickAttempts ?? 3);
         this.setWorkflow('WAIT_TELEPORT', 'waiting', 'Đang chờ teleport tới đảo.');
         this.startPostIslandDiagnostics();
-
         await this.waitForJoined(settings.joinTimeoutMs ?? this.joinTimeout);
-        return Result.SUCCESS;
+    }
+
+    /** Clears a stale GUI before retrying /skyblock. */
+    async closeJoinWindow(gui) {
+        if (!gui?.isOpen?.()) return;
+        try {
+            await gui.close();
+        } catch (error) {
+            this.warn(`[SkyBlock] Không thể đóng GUI cũ trước khi retry: ${error.message}`);
+        }
+    }
+
+    waitForConnection(timeout) {
+        if (this.state.bot.connected) return Promise.resolve(Result.SUCCESS);
+        return new Promise((resolve, reject) => {
+            const onConnected = () => finish(Result.SUCCESS);
+            const finish = result => {
+                clearTimeout(timer);
+                this.events.off(Events.Connection.CONNECTED, onConnected);
+                resolve(result);
+            };
+            const timer = setTimeout(() => {
+                this.events.off(Events.Connection.CONNECTED, onConnected);
+                reject(new TimeoutError('Minecraft connection', timeout));
+            }, Math.max(1000, Number(timeout) || 30000));
+            this.events.on(Events.Connection.CONNECTED, onConnected);
+        });
+    }
+
+    joinRetryDelayMs(settings = this.configForWorkflow()) {
+        const value = Number(settings.joinRetryDelayMs);
+        return Number.isFinite(value) ? Math.min(Math.max(value, 1000), 60000) : 5000;
     }
 
     async clickRequired(gui, slot) {
@@ -415,6 +582,7 @@ class SkyBlockService extends BaseService {
     waitForJoined(timeout) {
         if (this.isJoined()) return Promise.resolve(Result.SUCCESS);
         return new Promise((resolve, reject) => {
+            let closeConfirmTimer = null;
             const joinedHandler = () => finish(Result.SUCCESS);
             const teleportHandler = () => {
                 this.confirmJoined('Server đã teleport bot tới SkyBlock.');
@@ -430,7 +598,8 @@ class SkyBlockService extends BaseService {
             const closeHandler = () => {
                 // Sau click slot đảo, GUI đóng là tín hiệu server đã nhận lựa chọn.
                 // Chờ ngắn để ưu tiên teleport/scoreboard nếu chúng đến ngay sau đó.
-                setTimeout(() => {
+                clearTimeout(closeConfirmTimer);
+                closeConfirmTimer = setTimeout(() => {
                     if (!this.isJoined() && !this.bot.currentWindow) {
                         this.confirmJoined('GUI chọn đảo đã đóng sau khi chọn đảo.');
                         finish(Result.SUCCESS);
@@ -442,6 +611,7 @@ class SkyBlockService extends BaseService {
             ));
             const finish = result => {
                 clearTimeout(timer);
+                clearTimeout(closeConfirmTimer);
                 this.events.off(Events.SkyBlock.JOINED, joinedHandler);
                 this.bot.removeListener('forcedMove', teleportHandler);
                 this.bot.removeListener('scoreboardPosition', scoreboardHandler);
@@ -454,6 +624,7 @@ class SkyBlockService extends BaseService {
             };
             const finishError = error => {
                 clearTimeout(timer);
+                clearTimeout(closeConfirmTimer);
                 this.events.off(Events.SkyBlock.JOINED, joinedHandler);
                 this.bot.removeListener('forcedMove', teleportHandler);
                 this.bot.removeListener('scoreboardPosition', scoreboardHandler);
@@ -564,15 +735,28 @@ class SkyBlockService extends BaseService {
         if (this.isLoggedIn()) return Promise.resolve(Result.SUCCESS);
         return new Promise((resolve, reject) => {
             const handler = () => {
-                clearTimeout(timer);
-                this.events.off(Events.SkyBlock.LOGGED, handler);
+                cleanup();
                 resolve(Result.SUCCESS);
             };
-            const timer = setTimeout(() => {
+            const disconnected = reason => {
+                cleanup();
+                reject(new Error(`Minecraft connection ended before login${reason ? `: ${this.formatServerReason(reason)}` : '.'}`));
+            };
+            const cleanup = () => {
+                clearTimeout(timer);
                 this.events.off(Events.SkyBlock.LOGGED, handler);
+                this.events.off(Events.Connection.ENDED, disconnected);
+                this.events.off(Events.Connection.KICKED, disconnected);
+                this.events.off(Events.Connection.ERROR, disconnected);
+            };
+            const timer = setTimeout(() => {
+                cleanup();
                 reject(new TimeoutError('login confirmation', timeout));
             }, timeout);
             this.events.on(Events.SkyBlock.LOGGED, handler);
+            this.events.on(Events.Connection.ENDED, disconnected);
+            this.events.on(Events.Connection.KICKED, disconnected);
+            this.events.on(Events.Connection.ERROR, disconnected);
         });
     }
 
@@ -585,6 +769,7 @@ class SkyBlockService extends BaseService {
     cancelJoin() {
         if (!this.workflowTask) return Result.NO_ACTION;
         this.cancelled = true;
+        this.joinRequested = false;
         this.setWorkflow(this.state.skyblock.workflow.step, 'cancelled', 'Đã yêu cầu hủy tiến trình.');
         return Result.SUCCESS;
     }
@@ -606,14 +791,17 @@ class SkyBlockService extends BaseService {
         }
 
 
-        if (!this.isLoggedIn()) {
+        if (!this.state.bot.connected) return Result.NOT_CONNECTED;
 
-            return Result.NOT_LOGGED_IN;
-
-        }
-
-
-        return this.join();
+        // A mode must not fire a bare /skyblock command and immediately fail
+        // while the actual GUI workflow is still in progress. Await the shared
+        // retrying workflow until the server confirms SkyBlock.
+        const started = await this.startJoin('ensure-joined');
+        if (started === Result.PENDING && !this.workflowTask) return Result.PENDING;
+        if (started !== Result.PENDING && started !== Result.BUSY) return started;
+        const workflow = this.workflowTask;
+        if (workflow) await workflow;
+        return this.isJoined() ? Result.SUCCESS : Result.FAILED;
 
     }
 
@@ -627,7 +815,8 @@ class SkyBlockService extends BaseService {
         const delay = settings.islandTeleportDelayMs ?? 1000;
 
         this.info(`[SkyBlock] Đang gửi ${command} sau khi vào SkyBlock.`);
-        this.bot.chat(command);
+        const sent = await this.service('chat').sendCommand(command);
+        if (sent !== Result.SUCCESS) return sent;
         await this.delay(delay);
         if (!this.state.bot.connected || !this.isJoined()) {
             return Result.DISCONNECTED;
@@ -707,18 +896,103 @@ class SkyBlockService extends BaseService {
      *
      * @returns {String}
      */
-    leave() {
+    leave(reason = 'Server đưa bot ra khỏi SkyBlock') {
+
+        if (!this.state.skyblock.joined) {
+            return Result.NO_ACTION;
+        }
 
         this.state.skyblock.joined = false;
-
+        this.state.skyblock.islandReady = false;
+        this.setWorkflow('LEFT_SKYBLOCK', 'waiting', `${reason}.`);
 
         this.emit(
-            Events.SkyBlock.LEAVE
+            Events.SkyBlock.LEAVE,
+            reason
         );
-
 
         return Result.SUCCESS;
 
+    }
+
+    /**
+     * Debounces a presence check after a server teleport or scoreboard update.
+     * A teleport alone is not proof because joining an island also teleports.
+     */
+    scheduleLeaveCheck(source) {
+        if (!this.state.skyblock.joined || !this.state.bot.connected || this.leaveCheckTimer) return;
+        const delay = this.leaveDetectionDelayMs();
+        this.leaveCheckTimer = setTimeout(() => {
+            this.leaveCheckTimer = null;
+            this.evaluateSkyBlockPresence(source);
+        }, delay);
+        this.leaveCheckTimer.unref?.();
+    }
+
+    /**
+     * Emits SkyBlock.LEAVE only when a non-empty scoreboard no longer matches
+     * the configured SkyBlock markers. Empty/stale scoreboard data is ignored.
+     */
+    evaluateSkyBlockPresence(source = 'periodic scoreboard check') {
+        if (!this.state.skyblock.joined || !this.state.bot.connected || this.workflowTask) {
+            return Result.NO_ACTION;
+        }
+
+        const scoreboard = this.scoreboardText();
+        if (!scoreboard || this.matchesSkyBlock(scoreboard)) return Result.NO_ACTION;
+
+        const result = this.leave(`Xác nhận rời SkyBlock qua ${source}: ${scoreboard}`);
+        if (result === Result.SUCCESS) this.scheduleLeaveRecovery();
+        return result;
+    }
+
+    startLeaveMonitor() {
+        if (this.leaveMonitorTimer) return;
+        this.leaveMonitorTimer = setInterval(() => {
+            this.evaluateSkyBlockPresence('periodic scoreboard check');
+        }, this.leaveCheckIntervalMs());
+        this.leaveMonitorTimer.unref?.();
+    }
+
+    scheduleLeaveRecovery() {
+        if (this.leaveRecoveryTimer || !this.state.bot.connected) return;
+        const delay = this.leaveRecoveryDelayMs();
+        this.joinNotBefore = Date.now() + delay;
+        this.info(`[SkyBlock] Rời SkyBlock nhưng vẫn còn kết nối; chờ ${Math.ceil(delay / 1000)} giây trước khi vào lại.`);
+        this.leaveRecoveryTimer = setTimeout(() => {
+            this.leaveRecoveryTimer = null;
+            this.joinNotBefore = 0;
+            if (!this.state.bot.connected || this.state.skyblock.joined) return;
+            this.manager('recovery').request('SKYBLOCK_LEFT');
+        }, delay);
+        this.leaveRecoveryTimer.unref?.();
+    }
+
+    clearLeaveRecovery() {
+        if (this.leaveCheckTimer) clearTimeout(this.leaveCheckTimer);
+        if (this.leaveRecoveryTimer) clearTimeout(this.leaveRecoveryTimer);
+        this.leaveCheckTimer = null;
+        this.leaveRecoveryTimer = null;
+        this.joinNotBefore = 0;
+    }
+
+    leaveDetectionDelayMs() {
+        const value = Number(this.configForWorkflow().leaveDetectionDelayMs);
+        return Number.isFinite(value) ? Math.min(Math.max(value, 0), 10000) : 1500;
+    }
+
+    leaveRecoveryDelayMs() {
+        const value = Number(this.configForWorkflow().leaveRecoveryDelayMs);
+        return Number.isFinite(value) ? Math.min(Math.max(value, 1000), 60000) : this.joinRetryDelayMs();
+    }
+
+    leaveCheckIntervalMs() {
+        const value = Number(this.configForWorkflow().leaveCheckIntervalMs);
+        return Number.isFinite(value) ? Math.min(Math.max(value, 1000), 60000) : 5000;
+    }
+
+    isManualJoinSource(source) {
+        return ['manual', 'discord-panel'].includes(String(source));
     }
 
 
@@ -745,6 +1019,9 @@ class SkyBlockService extends BaseService {
     async destroy() {
         this.cancelJoin();
         this.stopPostIslandDiagnostics();
+        this.clearLeaveRecovery();
+        if (this.leaveMonitorTimer) clearInterval(this.leaveMonitorTimer);
+        this.leaveMonitorTimer = null;
         await super.destroy();
 
         return Result.SUCCESS;

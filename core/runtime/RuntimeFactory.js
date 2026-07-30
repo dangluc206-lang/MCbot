@@ -101,6 +101,14 @@ function createRuntime() {
             lastUpdate: null
         },
 
+        /** Minecraft command-channel cooldown and diagnostics. */
+        chat: {
+            lastCommandAt: null,
+            lastCommand: null,
+            lastGuiClosedAt: null,
+            nextCommandAt: null
+        },
+
         /**
          * Inventory Runtime
          */
@@ -150,7 +158,15 @@ function createRuntime() {
 
             collected: 0,
 
-            lastCollectAt: null
+            lastCollectAt: null,
+
+            lastStorageSellAt: null,
+
+            lastStorageSellResult: null,
+
+            guiBackoffUntil: null,
+
+            lastGuiFailure: null
         },
 
         /**
@@ -164,6 +180,15 @@ function createRuntime() {
             sellCommand: '/kho sell',
             lastSell: 0,
             full: false,
+            lastGuiProbe: null,
+            capacityReservation: {
+                status: 'IDLE',
+                targets: [],
+                additionalStorageUnits: 0,
+                requiredFree: null,
+                free: null,
+                updatedAt: null
+            },
             gui: {
                 title: null,
                 rawTitle: null,
@@ -172,8 +197,63 @@ function createRuntime() {
                 filledSegments: 0,
                 totalSegments: 0,
                 full: false,
+                detail: {
+                    slot: 49,
+                    available: false,
+                    itemName: null,
+                    displayName: null,
+                    lines: [],
+                    status: null,
+                    amount: null,
+                    capacity: null,
+                    storage: {
+                        total: null,
+                        used: null,
+                        free: null,
+                        usedPercent: null,
+                        freePercent: null
+                    },
+                    rawNbt: null,
+                    rawComponents: null
+                },
+                items: [],
                 updatedAt: null
             }
+        },
+
+        /** Raw-smelting workflow executed after a successful /kho refresh. */
+        smelting: {
+            status: 'IDLE',
+            pass: 0,
+            lastRunAt: null,
+            lastError: null,
+            lastSkipReason: null
+        },
+
+        /** Block-to-ingot workflow executed after a successful /kho refresh. */
+        materialConversion: {
+            status: 'IDLE',
+            direction: null,
+            targets: [],
+            converted: [],
+            current: null,
+            lastRunAt: null,
+            lastError: null
+        },
+
+        /**
+         * Personal Vault Runtime (/pv 2)
+         */
+        personalVault: {
+            command: '/pv 2',
+            status: 'IDLE',
+            items: [],
+            updatedAt: null,
+            lastError: null,
+            lastNotice: null,
+            lastWithdrawal: null,
+            lastDeposit: null,
+            nextCommandAt: null
         },
 
         /**
@@ -192,6 +272,40 @@ function createRuntime() {
         fishing: {
             state: 'IDLE',
             running: false
+        },
+
+        crafting: {
+            active: false,
+            status: 'IDLE',
+            targetName: null,
+            targetItemKey: null,
+            targetCount: 0,
+            completedActions: 0,
+            totalActions: 0,
+            currentSlot: null,
+            clickRetryCount: 0,
+            error: null,
+            materials: [],
+            materialLedger: {
+                updatedAt: null,
+                entries: [],
+                total: 0
+            },
+            ledgerUpdatedAt: null,
+            existingItems: [],
+            personalVaultCheckedAt: null,
+            personalVaultWithdrawals: [],
+            partial: false,
+            deferredActions: [],
+            shiftReplanCount: 0,
+            inventoryPressureReplanCount: 0,
+            lastShiftCraft: null,
+            lastPersonalVaultAudit: null,
+            lastSuccessfulTargetAt: null,
+            nextTargetAttemptAt: null,
+            storageCheckedAt: null,
+            smeltingPass: 0,
+            updatedAt: null
         },
 
         /**

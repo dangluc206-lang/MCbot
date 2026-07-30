@@ -17,6 +17,8 @@ module.exports = Object.freeze({
     PANEL_COLLECTOR: 'panel:mode:collector',
     PANEL_DUNGEON: 'panel:mode:dungeon',
     PANEL_FISHING: 'panel:mode:fishing',
+    PANEL_SUPER_ALLOY: 'panel:mode:super-alloy',
+    PANEL_STORAGE_SELL: 'panel:storage:sell',
     PANEL_STOP: 'panel:mode:stop',
     PANEL_PAUSE: 'panel:mode:pause',
     PANEL_RESUME: 'panel:mode:resume',

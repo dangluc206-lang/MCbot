@@ -3,7 +3,8 @@
 const {
     CollectorMode,
     DungeonMode,
-    FishingMode
+    FishingMode,
+    SuperAlloyMode
 } = require('../modes');
 
 /**
@@ -33,6 +34,11 @@ module.exports = function registerModes(ctx) {
     modeManager.register(
         'fishing',
         new FishingMode(ctx)
+    );
+
+    modeManager.register(
+        'super-alloy',
+        new SuperAlloyMode(ctx)
     );
 
 };

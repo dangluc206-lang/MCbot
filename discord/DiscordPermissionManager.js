@@ -17,10 +17,10 @@ function idSet(value) {
 class DiscordPermissionManager {
     constructor(config = {}) {
         const permissions = config.permissions || {};
-        this.ownerIds = idSet(process.env.DISCORD_OWNER_IDS || config.ownerIds || config.ownerId || permissions.ownerIds);
-        this.adminRoleIds = idSet(process.env.DISCORD_ADMIN_ROLE_IDS || permissions.adminRoleIds);
-        this.moderatorRoleIds = idSet(process.env.DISCORD_MODERATOR_ROLE_IDS || permissions.moderatorRoleIds);
-        this.viewerRoleIds = idSet(process.env.DISCORD_VIEWER_ROLE_IDS || permissions.viewerRoleIds);
+        this.ownerIds = idSet(config.ownerIds || config.ownerId || permissions.ownerIds);
+        this.adminRoleIds = idSet(permissions.adminRoleIds || config.adminRoleIds);
+        this.moderatorRoleIds = idSet(permissions.moderatorRoleIds || config.moderatorRoleIds);
+        this.viewerRoleIds = idSet(permissions.viewerRoleIds || config.viewerRoleIds);
     }
 
     levelFor(interaction) {

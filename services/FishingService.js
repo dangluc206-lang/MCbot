@@ -34,7 +34,8 @@ class FishingService extends BaseService {
             const previousWindow = gui.window();
             const command = settings.command || '/afk';
             this.info(`Đang gửi ${command}.`);
-            this.bot.chat(command);
+            const sent = await this.service('chat').sendCommand(command);
+            if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi ${command}: ${sent}.`);
             const afkWindow = await this.waitForWindow(gui, previousWindow, settings.guiTimeoutMs ?? 10000);
             await new Promise(resolve => setTimeout(resolve, settings.afkMenuDelayMs ?? 1000));
 
@@ -121,18 +122,9 @@ class FishingService extends BaseService {
         this.paused = false;
         this.state.fishing.state = 'MOVING_TO_WATER';
         if (this.water) {
-            this.prepareNoDigMovement();
             const settings = this.config.fishing || {};
-            if (settings.forceDirectSprintJump) {
-                this.directFallbackActive = true;
-                await this.walkDirectlyToTarget(this.water.position, settings);
-            }
-            else {
-                await this.service('movement').moveTo(
-                    this.water.position,
-                    settings.targetReachDistance ?? 1
-                );
-            }
+            await this.moveToFishingTarget(settings);
+            await this.equipRod();
         }
         this.info('Đã tiếp tục câu cá.');
         return Result.SUCCESS;
@@ -145,7 +137,6 @@ class FishingService extends BaseService {
         if (typeof this.bot.equip !== 'function') throw new Error('Mineflayer không hỗ trợ equip cần câu.');
 
         this.rod = rod;
-        await this.equipRod();
         this.water = this.slotTarget(settings, this.afkSlot);
         if (!this.water) {
             throw new Error(`Chưa cấu hình tọa độ câu cho slot AFK ${this.afkSlot}.`);
@@ -153,13 +144,25 @@ class FishingService extends BaseService {
 
         this.state.fishing.state = 'MOVING_TO_WATER';
         this.info(`Slot AFK ${this.afkSlot}; đi tới điểm câu ${this.water.position.x}, ${this.water.position.y}, ${this.water.position.z}.`);
+        await this.moveToFishingTarget(settings);
+        await this.equipRod();
+        this.info('Đã tới điểm câu; mới cầm cần câu để bắt đầu câu.');
+        return Result.SUCCESS;
+    }
+
+    /**
+     * Reach the configured fishing position before equipping the rod or casting.
+     * Sprint-jump is the default AFK route because that terrain is server-controlled.
+     */
+    async moveToFishingTarget(settings) {
+        if (!this.water) throw new Error('Chưa có tọa độ điểm câu.');
         this.prepareNoDigMovement();
-        if (settings.forceDirectSprintJump) {
+        if (this.shouldForceDirectSprintJump(settings)) {
             this.info('Chạy nhảy trực tiếp qua dải đất nung tới điểm câu.');
             this.service('movement').stop();
             this.directFallbackActive = true;
             await this.walkDirectlyToTarget(this.water.position, settings);
-            return Result.SUCCESS;
+            return;
         }
         const moved = await this.service('movement').moveTo(
             this.water.position,
@@ -167,7 +170,10 @@ class FishingService extends BaseService {
         );
         if (moved !== Result.SUCCESS) throw new Error(`Không thể đi tới nước: ${moved}`);
         await this.waitForArrival(this.water.position, settings.moveTimeoutMs ?? 90000);
-        return Result.SUCCESS;
+    }
+
+    shouldForceDirectSprintJump(settings = {}) {
+        return settings.forceDirectSprintJump !== false;
     }
 
     isAtFishingTarget() {
@@ -288,6 +294,7 @@ class FishingService extends BaseService {
             let unsticking = false;
             const onForcedMove = () => {
                 forcedMoves += 1;
+                this.applyDirectMovementControls(target, settings);
                 if (forcedMoves !== 1 && forcedMoves % 5 !== 0) return;
                 const position = this.bot.entity?.position;
                 const current = position
@@ -306,6 +313,7 @@ class FishingService extends BaseService {
                 if (error) reject(error);
                 else resolve();
             };
+            this.applyDirectMovementControls(target, settings);
             const interval = setInterval(() => {
                 if (!this.running || this.paused) {
                     finish(new Error('Di chuyển thẳng tới điểm câu đã bị dừng.'));
@@ -349,19 +357,25 @@ class FishingService extends BaseService {
                     lastLookAt = Date.now();
                     Promise.resolve(this.bot.lookAt(new Vec3(target.x, position.y + 1.5, target.z), true)).catch(() => {});
                 }
-                this.bot.setControlState('forward', true);
-                this.bot.setControlState('sprint', true);
-                this.bot.setControlState(
-                    'jump',
-                    target.y > position.y + 0.6
-                    || settings.forceDirectSprintJump
-                    || this.hasObstacleAhead(target)
-                    || this.hasHazardousGroundAhead(target)
-                );
+                this.applyDirectMovementControls(target, settings);
             }, 100);
             const timer = setTimeout(() => finish(new Error(`Đi thẳng không tới được điểm câu trong ${timeout} ms.`)), timeout);
             this.bot.on('forcedMove', onForcedMove);
         });
+    }
+
+    applyDirectMovementControls(target, settings = {}) {
+        const position = this.bot.entity?.position;
+        if (!position || typeof this.bot.setControlState !== 'function') return;
+        this.bot.setControlState('forward', true);
+        this.bot.setControlState('sprint', true);
+        this.bot.setControlState(
+            'jump',
+            target.y > position.y + 0.6
+            || this.shouldForceDirectSprintJump(settings)
+            || this.hasObstacleAhead(target)
+            || this.hasHazardousGroundAhead(target)
+        );
     }
 
     async performUnstuckManeuver() {

@@ -3,6 +3,7 @@
 const BaseService = require('../core/base/BaseService');
 const Result = require('../core/constants/Result');
 const Events = require('../core/constants/Events');
+const { itemLabels } = require('../utils/ItemLabels');
 
 /**
  * ============================================================================
@@ -85,29 +86,33 @@ class InventoryService extends BaseService {
     /**
      * Đồng bộ inventory.
      *
+     * @param {{emit?: Boolean}} [options]
      * @returns {String}
      */
-    sync() {
+    sync(options = {}) {
 
         if (!this.bot?.inventory) {
             return Result.FAILED;
         }
 
 
-        const items =
-            this.bot.inventory.items();
+        const items = this.snapshotItems();
 
 
         this.state.inventory.items =
-            items.map(item => ({
+            items.map(item => {
+                const labels = itemLabels(item);
+                return {
                 name: item.name,
-                displayName: item.displayName || item.name,
+                displayName: labels[0] || item.displayName || item.name,
+                labels,
                 type: item.type,
                 count: item.count,
                 slot: item.slot,
                 durabilityUsed: item.durabilityUsed ?? null,
                 maxDurability: item.maxDurability ?? null
-            }));
+                };
+            });
 
 
         this.state.inventory.emptySlots =
@@ -118,27 +123,33 @@ class InventoryService extends BaseService {
             this.state.inventory.emptySlots <= 0;
 
 
-        this.emit(
-            Events.Inventory.UPDATE,
-            this.state.inventory
-        );
-
-
-        if (this.state.inventory.full) {
-
+        // Crafting sometimes needs to poll Mineflayer's inventory because a
+        // custom server recipe changed it without emitting windowUpdate.  The
+        // state must still refresh, but broadcasting an inventory event for
+        // every acknowledgement poll would flood listeners and Discord.
+        if (options.emit !== false) {
             this.emit(
-                Events.Inventory.FULL
+                Events.Inventory.UPDATE,
+                this.state.inventory
             );
 
-        }
+
+            if (this.state.inventory.full) {
+
+                this.emit(
+                    Events.Inventory.FULL
+                );
+
+            }
 
 
-        if (this.state.inventory.items.length === 0) {
+            if (this.state.inventory.items.length === 0) {
 
-            this.emit(
-                Events.Inventory.EMPTY
-            );
+                this.emit(
+                    Events.Inventory.EMPTY
+                );
 
+            }
         }
 
 
@@ -159,9 +170,18 @@ class InventoryService extends BaseService {
         }
 
 
-        return this.bot.inventory.slots
-            .filter(slot => !slot)
-            .length;
+        // Array#filter skips sparse slots. Mineflayer normally supplies a
+        // dense array, but treating holes as empty keeps both hotbar and test
+        // snapshots accurate.
+        // Mineflayer uses 9..35 for the main bag and 36..44 for the hotbar.
+        // Armour, crafting-grid, cursor, and off-hand slots must not make the
+        // craft safety gate believe it has more than 36 usable slots.
+        const slots = this.bot.inventory.slots;
+        let emptySlots = 0;
+        for (let slot = 9; slot <= 44 && slot < slots.length; slot += 1) {
+            if (!slots[slot]) emptySlots += 1;
+        }
+        return emptySlots;
 
     }
 
@@ -264,6 +284,46 @@ class InventoryService extends BaseService {
             name: this.bot.heldItem.name,
             count: this.bot.heldItem.count
         };
+
+    }
+
+
+    /**
+     * Returns every player-carried item exactly once. Mineflayer normally
+     * includes the hotbar in inventory.items(), but some server-driven window
+     * updates only expose it through inventory.slots.  Crafting must see both
+     * sources immediately after a /pv transfer.
+     *
+     * @returns {Array}
+     */
+    snapshotItems() {
+
+        if (!this.bot?.inventory) return [];
+
+        const bySlot = new Map();
+        const withoutSlot = [];
+        const add = (item, fallbackSlot = null) => {
+            if (!item) return;
+            const slot = Number.isInteger(item.slot) ? item.slot : fallbackSlot;
+            const normalized = Number.isInteger(slot) ? { ...item, slot } : item;
+            if (Number.isInteger(slot)) {
+                bySlot.set(slot, normalized);
+            } else {
+                withoutSlot.push(normalized);
+            }
+        };
+
+        for (const item of this.bot.inventory.items?.() || []) add(item);
+
+        // Vanilla player inventory uses 9-35 for the main bag and 36-44 for
+        // the taskbar/hotbar. Do not include armour, crafting-grid, cursor,
+        // or the off-hand slot in material totals.
+        const slots = this.bot.inventory.slots || [];
+        for (let slot = 9; slot <= 44 && slot < slots.length; slot += 1) {
+            add(slots[slot], slot);
+        }
+
+        return [...bySlot.values(), ...withoutSlot];
 
     }
 

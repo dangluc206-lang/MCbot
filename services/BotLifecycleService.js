@@ -11,8 +11,17 @@ class BotLifecycleService extends BaseService {
         this.actions = actions;
     }
 
-    async connect() {
-        return this.actions.connect ? this.actions.connect() : Result.FAILED;
+    /**
+     * Requests a process-owned Minecraft connection attempt.
+     * `force` is reserved for the persistent Discord Control Panel: it may
+     * replace a delayed post-kick reconnect, but never creates a second
+     * simultaneous socket.
+     *
+     * @param {{force?: Boolean, source?: String}} options
+     * @returns {Promise<String>}
+     */
+    async connect(options = {}) {
+        return this.actions.connect ? this.actions.connect(options) : Result.FAILED;
     }
 
     async restart() {
