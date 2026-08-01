@@ -19,6 +19,7 @@ const {
     nextResetDelay
 } = require('../index');
 const { itemLabels } = require('../utils/ItemLabels');
+const ServerCommandService = require('../services/ServerCommandService');
 
 // Keep legacy unit tests fast. Production defaults to a six-second command
 // hold after GUI close; individual tests opt in when timing is under test.
@@ -90,6 +91,99 @@ async function waitFor(predicate, timeout = 250) {
         await new Promise(resolve => setTimeout(resolve, 2));
     }
 }
+
+function createServerCommandService(config, chatService) {
+    return new ServerCommandService({
+        bot: null,
+        runtime: { state: {} },
+        config,
+        logger: null,
+        getService: name => name === 'chat' ? chatService : null
+    });
+}
+
+test('ServerCommandService sells only configured storage conversion targets', async () => {
+    const calls = [];
+    const chatService = {
+        sendCommand: async (...args) => {
+            calls.push(args);
+            return Result.PENDING;
+        }
+    };
+    const options = { beforeSend: () => {} };
+    const service = createServerCommandService({
+        storage: {
+            sellCommand: '/kho sell',
+            conversion: { targetItems: ['diamond'] }
+        }
+    }, chatService);
+
+    assert.equal(await service.sellStorage('diamond', options), Result.PENDING);
+    assert.deepEqual(calls, [['/kho sell diamond', options]]);
+
+    for (const ore of ['coal', 'diamond\nore', 'diamond\rore']) {
+        assert.equal(await service.sellStorage(ore, options), Result.FAILED);
+    }
+    assert.equal(calls.length, 1);
+});
+
+test('ServerCommandService rejects missing or invalid storage conversion targets safely', async () => {
+    const calls = [];
+    const chatService = {
+        sendCommand: async (...args) => calls.push(args)
+    };
+
+    for (const config of [
+        {},
+        { storage: { sellCommand: '/kho sell' } },
+        { storage: { sellCommand: '/kho sell', conversion: { targetItems: 'diamond' } } }
+    ]) {
+        const service = createServerCommandService(config, chatService);
+        assert.equal(await service.sellStorage('diamond'), Result.FAILED);
+    }
+    assert.deepEqual(calls, []);
+});
+
+test('ServerCommandService resolves the SkyBlock selector command without using islandCommand', async () => {
+    const calls = [];
+    const chatService = {
+        sendCommand: async (...args) => {
+            calls.push(args);
+            return Result.PENDING;
+        }
+    };
+    const options = { beforeSend: () => {} };
+    const primaryService = createServerCommandService({
+        serverCommands: { skyblockSelector: 'server-selector' },
+        skyblock: { selectorCommand: 'skyblock-selector', islandCommand: '/is' }
+    }, chatService);
+
+    assert.equal(await primaryService.openSkyBlockSelector(options), Result.PENDING);
+    assert.deepEqual(calls, [['/server-selector', options]]);
+
+    const selectorService = createServerCommandService({
+        skyblock: { selectorCommand: 'skyblock-selector', islandCommand: '/is' }
+    }, chatService);
+    assert.equal(await selectorService.openSkyBlockSelector(), Result.PENDING);
+
+    const fallbackService = createServerCommandService({
+        skyblock: { islandCommand: '/is' }
+    }, chatService);
+    assert.equal(await fallbackService.openSkyBlockSelector(), Result.PENDING);
+    assert.equal(await fallbackService.goIsland(), Result.PENDING);
+    assert.deepEqual(calls.slice(1), [
+        ['/skyblock-selector', undefined],
+        ['/skyblock', undefined],
+        ['/is', undefined]
+    ]);
+
+    const invalidService = createServerCommandService({
+        serverCommands: { skyblockSelector: 'bad\ncommand' },
+        skyblock: { islandCommand: '/is' }
+    }, chatService);
+    assert.equal(await invalidService.openSkyBlockSelector(), Result.FAILED);
+    assert.equal(calls.length, 4);
+});
 
 test('framework can restart after a clean shutdown', async () => {
     const framework = new Framework(new FakeBot(), {});

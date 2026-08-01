@@ -17,6 +17,7 @@ module.exports = {
     PersonalVaultService: require('./PersonalVaultService'),
     PlayerService: require('./PlayerService'),
     SkyBlockService: require('./SkyBlockService'),
+    ServerCommandService: require('./ServerCommandService'),
     SmeltingService: require('./SmeltingService'),
     StorageService: require('./StorageService'),
     ViewService: require('./ViewService')

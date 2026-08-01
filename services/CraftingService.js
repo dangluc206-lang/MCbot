@@ -1495,7 +1495,7 @@ class CraftingService extends BaseService {
         }
 
         this.run.preparedTier2ActionIndex = null;
-        this.service('inventory')?.sync?.();
+        this.service('inventory')?.sync?.({ emit: false });
         if (completeAfterPacking) return this._completeOrPromoteB3();
 
         this.run.status = 'OPENING_GUI';
@@ -1747,7 +1747,7 @@ class CraftingService extends BaseService {
         // snapshot before deciding that a click was ignored.  This also
         // includes hotbar slots, which are a common destination for a recipe
         // result when the main inventory is crowded.
-        this.service('inventory')?.sync?.();
+        this.service('inventory')?.sync?.({ emit: false });
 
         const inventoryChanged = this._inventorySignature() !== pending.inventorySignature;
         const guiChanged = (this.state.gui.lastUpdate || 0) > pending.guiUpdatedAt;

@@ -26,10 +26,16 @@ class ServerCommandService extends BaseService {
     }
 
     async sellStorage(ore, options) {
-        if (!this.ctx.config.storage.targetItems.includes(ore)) {
-            return Result.INVALID_ARGUMENT;
-        }
-        const command = this.ctx.config.storage.sellCommand;
+        const storage = this.ctx.config?.storage;
+        const targetItems = storage?.conversion?.targetItems;
+        if (
+            typeof ore !== 'string' ||
+            /[\x00-\x1F\x7F]/.test(ore) ||
+            !Array.isArray(targetItems) ||
+            !targetItems.includes(ore)
+        ) return Result.FAILED;
+
+        const command = storage.sellCommand;
         return this.chatService.sendCommand(`${command} ${ore}`, options);
     }
 
@@ -39,8 +45,24 @@ class ServerCommandService extends BaseService {
     }
 
     async openSkyBlockSelector(options) {
-        const command = this.ctx.config.skyblock.islandCommand || '/skyblock';
+        const serverCommands = this.ctx.config?.serverCommands;
+        const skyblock = this.ctx.config?.skyblock;
+        const configuredCommand = serverCommands && typeof serverCommands === 'object' &&
+            Object.hasOwn(serverCommands, 'skyblockSelector')
+            ? serverCommands.skyblockSelector
+            : skyblock && typeof skyblock === 'object' && Object.hasOwn(skyblock, 'selectorCommand')
+                ? skyblock.selectorCommand
+                : '/skyblock';
+        const command = this._normalizeCommand(configuredCommand);
+        if (!command) return Result.FAILED;
         return this.chatService.sendCommand(command, options);
+    }
+
+    _normalizeCommand(command) {
+        if (typeof command !== 'string' || /[\x00-\x1F\x7F]/.test(command)) return null;
+        const text = command.trim();
+        if (!text) return null;
+        return text.startsWith('/') ? text : `/${text}`;
     }
 
     async openDungeon(options) {
