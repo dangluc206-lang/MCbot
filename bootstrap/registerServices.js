@@ -18,18 +18,9 @@ const {
     SkyBlockService,
     SmeltingService,
     StorageService,
-    ViewService
+    ViewService,
+    ServerCommandService
 } = require('../services');
-
-/**
- * ============================================================================
- * Register Services
- * ============================================================================
- *
- * Khởi tạo và đăng ký toàn bộ Service.
- *
- * ============================================================================
- */
 
 module.exports = function registerServices(ctx) {
 
@@ -123,4 +114,8 @@ module.exports = function registerServices(ctx) {
         new ViewService(ctx)
     );
 
+    ctx.registerService(
+        'serverCommands',
+        new ServerCommandService(ctx)
+    );
 };
