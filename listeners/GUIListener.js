@@ -228,6 +228,11 @@ class GUIListener extends BaseListener {
             updatedAt: Date.now()
         };
         this.state.storage.full = this.state.storage.gui.full;
+        this.emit(Events.Storage.SNAPSHOT, {
+            window,
+            snapshot: this.state.storage.gui
+        });
+        return this.state.storage.gui;
     }
 
     _storageDetailSlot() {

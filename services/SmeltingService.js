@@ -3,6 +3,7 @@
 const BaseService = require('../core/base/BaseService');
 const Result = require('../core/constants/Result');
 const Events = require('../core/constants/Events');
+const SmeltingScreen = require('../screens/SmeltingScreen');
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -52,7 +53,7 @@ class SmeltingService extends BaseService {
     }
 
     /** Executes the configured number of raw-smelting passes. */
-    async run() {
+    async run(options = {}) {
         if (!this.state.bot.connected) return Result.NOT_CONNECTED;
         if (this.running) return Result.BUSY;
 
@@ -62,6 +63,15 @@ class SmeltingService extends BaseService {
             this._setState({ status: 'IDLE', pass: 0, lastError: null, lastSkipReason: 'NO_RAW_MATERIALS' });
             return Result.NO_ACTION;
         }
+
+        const gui = this.service('gui');
+        const delegatedOwner = typeof options.guiOwner === 'string' && options.guiOwner.trim()
+            ? options.guiOwner.trim()
+            : null;
+        const currentOwner = gui?.owner?.() || null;
+        if (currentOwner && currentOwner !== delegatedOwner) return Result.BUSY;
+        const acquired = currentOwner ? null : gui?.acquire?.('smelting');
+        if (acquired && acquired !== Result.SUCCESS) return acquired;
 
         this.running = true;
         this._setState({ status: 'RUNNING', pass: 0, lastError: null });
@@ -83,38 +93,37 @@ class SmeltingService extends BaseService {
             return Result.FAILED;
         } finally {
             this.running = false;
+            if (acquired === Result.SUCCESS) gui?.release?.('smelting');
         }
     }
 
     async _runPass(settings, pass) {
         const gui = this.service('gui');
-        const chat = this.service('chat');
-        if (!gui || !chat) return Result.FAILED;
+        const serverCommands = this.service('serverCommands');
+        if (!gui || !serverCommands?.openSmeltingMenu) return Result.FAILED;
 
         const beforeMenu = gui.window();
         const beforeMenuUpdate = this.state.gui.lastUpdate || 0;
-        const sent = await chat.sendCommand(settings.command);
+        const sent = await serverCommands.openSmeltingMenu();
         if (sent !== Result.SUCCESS) return sent;
 
         const menu = await this._waitForWindowChange(gui, beforeMenu, beforeMenuUpdate, settings.guiTimeoutMs);
-        const menuSlot = Number(settings.menuSlot);
-        if (!Number.isInteger(menuSlot) || !menu?.slots?.[menuSlot]) return Result.GUI_NOT_FOUND;
-
         this._setState({ status: 'OPENING_SMELTING_GUI', pass });
-        const menuUpdate = this.state.gui.lastUpdate || 0;
-        const clickedMenu = await gui.click(menuSlot, Number(settings.menuButton) || 0, 0);
-        if (clickedMenu !== Result.SUCCESS) return clickedMenu;
-
-        const smeltingWindow = await this._waitForWindowChange(gui, menu, menuUpdate, settings.guiTimeoutMs);
-        const actionSlot = Number(settings.actionSlot);
-        if (!Number.isInteger(actionSlot) || !smeltingWindow?.slots?.[actionSlot]) return Result.GUI_NOT_FOUND;
+        const openedSmelting = await this._screen(gui).clickMenuAndWait(settings.guiTimeoutMs);
+        if (openedSmelting.result !== Result.SUCCESS) return openedSmelting.result;
+        const smeltingWindow = openedSmelting.window;
+        if (!smeltingWindow) return Result.GUI_NOT_FOUND;
 
         this._setState({ status: 'SMELTING', pass });
-        const clickedAction = await gui.click(actionSlot, Number(settings.actionButton) || 0, 0);
+        const clickedAction = await this._screen(gui).clickAction();
         if (clickedAction !== Result.SUCCESS) return clickedAction;
         await this._sleep(this._actionDelayMs(settings));
         await this._closeOpenWindow(gui);
         return Result.SUCCESS;
+    }
+
+    _screen(gui) {
+        return new SmeltingScreen(gui, { config: this.config, events: this.events });
     }
 
     async _closeOpenWindow(gui) {

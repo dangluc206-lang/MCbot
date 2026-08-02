@@ -8,7 +8,11 @@
     "reconnectDelayMs": 5000,
     "kickReconnectDelayMs": 300000,
     "reconnectMaxDelayMs": 60000,
-    "commandAfterGuiCloseDelayMs": 6000
+    "commandAfterGuiCloseDelayMs": 6000,
+    "loginPassword": "",
+    "loginAfterSpawnDelayMs": 1000,
+    "loginAfterLoginDelayMs": 1000,
+    "loginTimeoutMs": 15000
   },
   "serverReset": {
     "timeZone": "Asia/Ho_Chi_Minh",
@@ -25,6 +29,17 @@
   },
   "guiProbe": {
     "windowTimeoutMs": 1000
+  },
+  "serverCommands": {
+    "craftingMenu": "/ks",
+    "personalVault": "/pv 2",
+    "storage": "/kho",
+    "storageSell": "/kho sell",
+    "island": "/is",
+    "skyblockSelector": "/skyblock",
+    "dungeon": "/d",
+    "autofarm": "/autofarm",
+    "fishingAfk": "/afk"
   },
   "crafting": {
     "command": "/ks",
@@ -230,6 +245,9 @@
         "gold_ingot": "gold_block",
         "diamond": "diamond_block",
         "emerald": "emerald_block"
+      },
+      "unpackItems": {
+        "coal": { "aliases": ["Đổi thành than"] }
       }
     },
     "sellCommand": "/kho sell",

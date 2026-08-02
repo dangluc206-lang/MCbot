@@ -13,6 +13,7 @@ module.exports = {
     InventoryService: require('./InventoryService'),
     MiningService: require('./MiningService'),
     MaterialConversionService: require('./MaterialConversionService'),
+    MinecraftLoginService: require('./MinecraftLoginService'),
     MovementService: require('./MovementService'),
     PersonalVaultService: require('./PersonalVaultService'),
     PlayerService: require('./PlayerService'),

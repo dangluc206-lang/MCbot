@@ -3,6 +3,7 @@
 const BaseService = require('../core/base/BaseService');
 const Result = require('../core/constants/Result');
 const Events = require('../core/constants/Events');
+const StorageScreen = require('../screens/StorageScreen');
 
 /**
  * Owns reusable storage inspection and selling operations. Modes decide when
@@ -78,7 +79,6 @@ class StorageService extends BaseService {
         }
 
         const settings = this.config.storage || {};
-        const command = settings.sellCommand || this.state.storage.sellCommand;
         const delayMs = Number.isFinite(settings.sellCommandDelayMs)
             ? Math.max(0, settings.sellCommandDelayMs)
             : 350;
@@ -86,9 +86,11 @@ class StorageService extends BaseService {
         this.state.storage.selling = true;
         this.emit(Events.Storage.SELL_STORAGE);
         try {
-            await this._waitForPersonalVaultCooldown(command);
+            await this._waitForPersonalVaultCooldown(settings.sellCommand || this.state.storage.sellCommand);
+            const serverCommands = this.service('serverCommands');
+            if (!serverCommands?.sellStorage) return Result.FAILED;
             for (const ore of selectedOres) {
-                const sent = await this.service('chat').sendCommand(`${command} ${ore}`);
+                const sent = await serverCommands.sellStorage(ore);
                 if (sent !== Result.SUCCESS) return sent;
                 if (delayMs > 0) await this.manager('scheduler')?.sleep(delayMs);
             }
@@ -135,13 +137,25 @@ class StorageService extends BaseService {
         if (!this.bot || !this.gui) return Result.FAILED;
         if (this.checkingGui) return Result.BUSY;
 
+        const delegatedOwner = typeof options.guiOwner === 'string' && options.guiOwner.trim()
+            ? options.guiOwner.trim()
+            : null;
+        const currentOwner = this.gui.owner?.() || null;
+        if (currentOwner && currentOwner !== delegatedOwner) {
+            this.debug(`Storage refresh skipped; GUI owner=${currentOwner}.`);
+            return Result.BUSY;
+        }
+        const acquired = currentOwner ? null : this.gui.acquire?.('storage');
+        if (acquired && acquired !== Result.SUCCESS) return acquired;
+        const activeGuiOwner = currentOwner || 'storage';
+
         const settings = this.config.storage || {};
-        const chat = this.service('chat');
         const command = settings.guiCommand || '/kho';
         const timeout = settings.guiTimeoutMs ?? 5000;
         const retryAttempts = this._guiRetryAttempts(settings);
         const retryDelayMs = this._guiRetryDelay(settings);
         const runPostProcessing = options.runPostProcessing !== false;
+        const requireFreeSpace = options.requireFreeSpace === true;
         // Crafting keeps raw B1 material available, so it can request
         // smelting without immediately packing the result into blocks.
         const runSmelting = runPostProcessing && options.runSmelting !== false;
@@ -167,9 +181,13 @@ class StorageService extends BaseService {
                     // server-side cooldown and waiting for an opaque timeout.
                     await this._waitForPersonalVaultCooldown(command);
                     let opened;
-                    const sent = await chat.sendCommand(command, {
+                    const serverCommands = this.service('serverCommands');
+                    if (!serverCommands?.openStorage) {
+                        throw new Error('ServerCommandService chưa sẵn sàng để mở /kho.');
+                    }
+                    const sent = await serverCommands.openStorage({
                         beforeSend: () => {
-                            opened = this._waitForFreshStorageGui(Date.now(), timeout);
+                            opened = this._waitForFreshStorageGui(Date.now(), timeout, { requireFreeSpace });
                         }
                     });
                     if (sent !== Result.SUCCESS) {
@@ -208,7 +226,7 @@ class StorageService extends BaseService {
             // command gateway starts its required post-GUI cooldown.
             await this._closeOpenWindow();
             if (runSmelting) {
-                const smeltingResult = await this.service('smelting')?.run?.();
+                const smeltingResult = await this.service('smelting')?.run?.({ guiOwner: activeGuiOwner });
                 if (smeltingResult && smeltingResult !== Result.SUCCESS && smeltingResult !== Result.NO_ACTION) {
                     this.warn(`Đọc /kho xong nhưng không thể nung raw: ${smeltingResult}.`);
                 }
@@ -217,8 +235,8 @@ class StorageService extends BaseService {
                 const conversion = this.service('materialConversion');
                 const conversionResult = runCompression
                     ? (conversion?.pack
-                        ? await conversion.pack()
-                        : await conversion?.run?.({ direction: 'pack' }))
+                        ? await conversion.pack({ guiOwner: activeGuiOwner })
+                        : await conversion?.run?.({ direction: 'pack', guiOwner: activeGuiOwner }))
                     : Result.NO_ACTION;
                 if (conversionResult && conversionResult !== Result.SUCCESS && conversionResult !== Result.NO_ACTION) {
                     this.warn(`Đọc /kho xong nhưng không thể nén phôi/ngọc thành khối: ${conversionResult}.`);
@@ -243,6 +261,7 @@ class StorageService extends BaseService {
                 }
             }
             this.checkingGui = false;
+            if (acquired === Result.SUCCESS) this.gui.release?.('storage');
         }
     }
 
@@ -263,7 +282,10 @@ class StorageService extends BaseService {
             const reserved = await this.reserveCapacityForUnpack(rawRequirements, rawSlots, options);
             if (reserved !== Result.SUCCESS && reserved !== Result.NO_ACTION) return reserved;
         }
-        return conversion.unpackForRequirements(rawRequirements, rawSlots);
+        return conversion.unpackForRequirements(rawRequirements, rawSlots, {
+            force: options.forceUnpack === true,
+            guiOwner: options.guiOwner
+        });
     }
 
     /**
@@ -285,7 +307,9 @@ class StorageService extends BaseService {
         const conversion = this.service('materialConversion');
         if (!conversion?.getUnpackPlan) return Result.NO_ACTION;
 
-        const plan = conversion.getUnpackPlan(rawRequirements, rawSlots);
+        const plan = conversion.getUnpackPlan(rawRequirements, rawSlots, {
+            force: options.forceUnpack === true
+        });
         if (plan.targets.length === 0) {
             this._setCapacityReservation('NOT_NEEDED', plan, this.getStorageStats());
             return Result.NO_ACTION;
@@ -321,7 +345,11 @@ class StorageService extends BaseService {
         // A sale changes server-side storage but does not reliably update the
         // existing GUI snapshot. Re-read without post-processing so the next
         // unpack decision uses current, direct B1/block quantities.
-        const refreshResult = await this.refreshStorageGui({ runPostProcessing: false });
+        const refreshOptions = { runPostProcessing: false };
+        if (typeof options.guiOwner === 'string' && options.guiOwner.trim()) {
+            refreshOptions.guiOwner = options.guiOwner.trim();
+        }
+        const refreshResult = await this.refreshStorageGui(refreshOptions);
         if (refreshResult !== Result.SUCCESS) {
             this._setCapacityReservation('REFRESH_FAILED', plan, this.getStorageStats(), requiredFree);
             return refreshResult;
@@ -347,10 +375,13 @@ class StorageService extends BaseService {
      * @returns {Promise<String>}
      */
     async repackAndProtectCapacity(options = {}) {
-        const packed = await this.refreshStorageGui();
+        const ownerOptions = typeof options.guiOwner === 'string' && options.guiOwner.trim()
+            ? { guiOwner: options.guiOwner.trim() }
+            : undefined;
+        const packed = await this.refreshStorageGui(ownerOptions);
         if (packed !== Result.SUCCESS) return packed;
 
-        const refreshed = await this.refreshStorageGui({ runPostProcessing: false });
+        const refreshed = await this.refreshStorageGui({ runPostProcessing: false, ...(ownerOptions || {}) });
         if (refreshed !== Result.SUCCESS) return refreshed;
 
         const stats = this.getStorageStats();
@@ -394,7 +425,8 @@ class StorageService extends BaseService {
     }
 
     _sellArgument(ore) {
-        return typeof ore === 'string' ? ore.trim().toUpperCase() : '';
+        if (typeof ore !== 'string' || /[\x00-\x1F\x7F]/.test(ore)) return '';
+        return ore.trim().toUpperCase();
     }
 
     _formatStorageStats(stats) {
@@ -502,7 +534,7 @@ class StorageService extends BaseService {
      * @returns {Promise<Object>}
      * @private
      */
-    _waitForFreshStorageGui(requestedAt, timeout) {
+    _waitForFreshStorageGui(requestedAt, timeout, options = {}) {
         const events = this.manager('events');
         if (!events?.on || !events?.off) {
             return Promise.reject(new Error('Event manager không sẵn sàng để chờ GUI kho.'));
@@ -514,12 +546,21 @@ class StorageService extends BaseService {
             let lastActionBar = '';
             const cleanup = () => {
                 clearTimeout(timer);
-                events.off(Events.GUI.OPEN, onOpen);
+                events.off(Events.Storage.SNAPSHOT, onOpen);
                 events.off(Events.Player.MESSAGE, onMessage);
                 events.off(Events.Player.ACTION_BAR, onActionBar);
             };
-            const onOpen = window => {
-                const snapshot = this.state.storage.gui;
+            const onOpen = payload => {
+                const window = payload?.window;
+                if (!this._storageScreen().isStorageWindow(window)) {
+                    if (this.config.storage?.guiDebug === true) {
+                        this.info(
+                            `[Storage GUI] ÄÃ£ má»Ÿ GUI khÃ¡c: "${this._shortText(this._windowTitle(window)) || '(khÃ´ng cÃ³ title)'}".`
+                        );
+                    }
+                    return;
+                }
+                const snapshot = payload?.snapshot;
                 if (!snapshot?.updatedAt || snapshot.updatedAt < requestedAt) {
                     if (this.config.storage?.guiDebug === true) {
                         this.info(
@@ -528,6 +569,7 @@ class StorageService extends BaseService {
                     }
                     return;
                 }
+                if (options.requireFreeSpace === true && !Number.isFinite(snapshot.detail?.storage?.free)) return;
                 cleanup();
                 resolve(snapshot);
             };
@@ -540,7 +582,7 @@ class StorageService extends BaseService {
                 if (message) lastActionBar = message;
             };
 
-            events.on(Events.GUI.OPEN, onOpen);
+            events.on(Events.Storage.SNAPSHOT, onOpen);
             events.on(Events.Player.MESSAGE, onMessage);
             events.on(Events.Player.ACTION_BAR, onActionBar);
             timer = setTimeout(() => {
@@ -592,6 +634,13 @@ class StorageService extends BaseService {
         } catch (error) {
             return '';
         }
+    }
+
+    _storageScreen() {
+        return new StorageScreen(this.gui, {
+            config: this.config,
+            events: this.manager('events')
+        });
     }
 
     emit(event, ...args) {

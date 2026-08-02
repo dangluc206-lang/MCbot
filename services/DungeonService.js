@@ -4,6 +4,7 @@ const BaseService = require('../core/base/BaseService');
 const Result = require('../core/constants/Result');
 const States = require('../core/constants/States');
 const Events = require('../core/constants/Events');
+const DungeonScreen = require('../screens/DungeonScreen');
 
 /**
  * ============================================================================
@@ -201,8 +202,9 @@ class DungeonService extends BaseService {
 
         const settings = this.config.dungeon || {};
         const gui = this.service('gui');
-        const command = settings.command || '/d';
         const slot = settings.entrySlot ?? 12;
+        const acquired = gui?.acquire?.('dungeon');
+        if (acquired && acquired !== Result.SUCCESS) return acquired;
 
         try {
             this.entering = true;
@@ -214,14 +216,17 @@ class DungeonService extends BaseService {
                 await this.enableAutoFarm(gui, settings);
             }
 
-            this.info(`Đang gửi ${command}.`);
-            const sent = await this.service('chat').sendCommand(command);
-            if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi ${command}: ${sent}.`);
+            this.info('Đang gửi lệnh mở Dungeon.');
+            const serverCommands = this.service('serverCommands');
+            const sent = serverCommands?.openDungeon
+                ? await serverCommands.openDungeon()
+                : Result.FAILED;
+            if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi lệnh Dungeon: ${sent}.`);
 
             const window = await this.waitForWindow(gui, settings.guiTimeoutMs ?? 10000);
             await this.waitForSlot(gui, slot, settings.slotReadyTimeoutMs ?? 3000);
             this.info(`GUI Dungeon đã mở; click slot ${slot}.`);
-            const clicked = await gui.click(slot);
+            const clicked = await this._screen(gui).clickEntry();
             if (clicked !== Result.SUCCESS) {
                 throw new Error(`Không click được slot Dungeon ${slot}: ${clicked}`);
             }
@@ -247,6 +252,7 @@ class DungeonService extends BaseService {
         }
         finally {
             this.entering = false;
+            if (acquired === Result.SUCCESS) gui?.release?.('dungeon');
         }
     }
 
@@ -382,17 +388,19 @@ class DungeonService extends BaseService {
 
     async enableAutoFarm(gui, settings) {
         const previousWindow = gui.window();
-        const command = settings.autofarmCommand || '/autofarm';
         const slot = settings.autofarmSlot ?? 21;
 
-        this.info(`Đang gửi ${command}.`);
-        const sent = await this.service('chat').sendCommand(command);
-        if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi ${command}: ${sent}.`);
+        this.info('Đang gửi lệnh mở AutoFarm.');
+        const serverCommands = this.service('serverCommands');
+        const sent = serverCommands?.openAutofarm
+            ? await serverCommands.openAutofarm()
+            : Result.FAILED;
+        if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi lệnh AutoFarm: ${sent}.`);
         await this.delay(settings.autofarmMenuDelayMs ?? 1000);
         await this.waitForWindow(gui, settings.guiTimeoutMs ?? 10000, previousWindow);
         await this.waitForSlot(gui, slot, settings.slotReadyTimeoutMs ?? 3000);
         this.info(`GUI AutoFarm đã mở; click slot ${slot}.`);
-        const clicked = await gui.click(slot);
+        const clicked = await this._screen(gui).clickAutofarm();
         if (clicked !== Result.SUCCESS) {
             throw new Error(`Không click được slot AutoFarm ${slot}: ${clicked}`);
         }
@@ -523,12 +531,17 @@ class DungeonService extends BaseService {
 
         const gui = this.service('gui');
         const settings = this.config.dungeon || {};
+        const acquired = gui?.acquire?.('dungeon-store');
+        if (acquired && acquired !== Result.SUCCESS) return acquired;
         const previousWindow = gui.window();
         try {
             this.storing = true;
             this.info('Inventory đầy; đang gửi /pv 2.');
             const command = settings.storageCommand || '/pv 2';
-            const sent = await this.service('chat').sendCommand(command);
+            const serverCommands = this.service('serverCommands');
+            const sent = serverCommands?.openDungeonStorage
+                ? await serverCommands.openDungeonStorage()
+                : Result.FAILED;
             if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi ${command}: ${sent}.`);
             const window = await this.waitForWindow(gui, settings.storageGuiTimeoutMs ?? 10000, previousWindow);
 
@@ -551,6 +564,7 @@ class DungeonService extends BaseService {
         }
         finally {
             this.storing = false;
+            if (acquired === Result.SUCCESS) gui?.release?.('dungeon-store');
         }
     }
 
@@ -748,6 +762,10 @@ class DungeonService extends BaseService {
             .map(entity => `${this.entityLabel(entity)} [type=${entity.type ?? 'custom'}, name=${entity.name ?? '-'}, mob=${entity.mobType ?? '-'}, ${entity.position.distanceTo(this.bot.entity.position).toFixed(1)}m]`)
             .slice(0, 10);
         this.info(`Chưa có mục tiêu; entity gần: ${nearby.join(', ') || 'none'}.`);
+    }
+
+    _screen(gui) {
+        return new DungeonScreen(gui, { config: this.config, events: this.events });
     }
 
     waitForWindow(gui, timeout, previousWindow = null) {

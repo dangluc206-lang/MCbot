@@ -436,6 +436,14 @@ test('DiscordController times out and destroys a client that never becomes ready
     assert.equal(client.listenerCount(DiscordEvents.InteractionCreate), 0);
 });
 
+test('DiscordController preserves a Discord login failure while cleaning its ready wait', async () => {
+    const client = new FakeDiscordClient({ loginError: new Error('invalid Discord token') });
+    const controller = new DiscordController(controllerContext(), { createClient: () => client, readyTimeoutMs: 100 });
+    await assert.rejects(controller.start(), /invalid Discord token/);
+    assert.equal(client.destroyed, true);
+    assert.equal(client.listenerCount(DiscordEvents.InteractionCreate), 0);
+});
+
 test('ControlPanelManager recreates a deleted persistent dashboard message', async () => {
     const events = new EventEmitter();
     const ctx = context();

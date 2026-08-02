@@ -42,6 +42,7 @@ class GUIService extends BaseService {
          * @private
          */
         this.waiting = null;
+        this.guiOwner = null;
     }
 
 
@@ -71,6 +72,8 @@ class GUIService extends BaseService {
 
         this.bot.on('windowOpen', window => {
 
+            this.debug(`GUI windowOpen owner=${this.guiOwner || 'none'} id=${window?.id ?? 'unknown'} title=${this._windowTitle(window)}`);
+
             this.sync(window);
 
 
@@ -84,11 +87,15 @@ class GUIService extends BaseService {
 
         this.bot.on('windowClose', () => {
 
+            const window = this.window();
+            this.debug(`GUI windowClose owner=${this.guiOwner || 'none'} id=${window?.id ?? 'unknown'} title=${this._windowTitle(window)}`);
+
             this.clear();
 
 
             this.emit(
-                Events.GUI.CLOSE
+                Events.GUI.CLOSE,
+                window
             );
 
         });
@@ -190,6 +197,33 @@ class GUIService extends BaseService {
 
     }
 
+    acquire(owner) {
+        const requested = typeof owner === 'string' && owner.trim() ? owner.trim() : null;
+        if (!requested) return Result.FAILED;
+        if (this.guiOwner && this.guiOwner !== requested) {
+            this.debug(`GUI owner busy current=${this.guiOwner} requested=${requested}`);
+            return Result.BUSY;
+        }
+        this.guiOwner = requested;
+        this.debug(`GUI owner acquired=${requested}`);
+        return Result.SUCCESS;
+    }
+
+    release(owner) {
+        if (!this.guiOwner) return Result.NO_ACTION;
+        if (this.guiOwner !== owner) {
+            this.debug(`GUI owner release ignored current=${this.guiOwner} requested=${owner || 'none'}`);
+            return Result.BUSY;
+        }
+        this.debug(`GUI owner released=${this.guiOwner}`);
+        this.guiOwner = null;
+        return Result.SUCCESS;
+    }
+
+    owner() {
+        return this.guiOwner;
+    }
+
 
     /**
      * Chờ GUI mở.
@@ -283,12 +317,12 @@ class GUIService extends BaseService {
      *
      * @returns {Promise<String>}
      */
-    async click(slot, mouseButton = 0, mode = 0) {
+    async click(slot, mouseButton = 0, mode = 0, expectedWindow = null) {
 
         const window = this.window();
 
 
-        if (!window) {
+        if (!window || (expectedWindow && window !== expectedWindow)) {
             return Result.GUI_NOT_FOUND;
         }
 
@@ -366,11 +400,17 @@ class GUIService extends BaseService {
     async destroy() {
 
         this.clear();
+        this.guiOwner = null;
 
         await super.destroy();
 
         return Result.SUCCESS;
 
+    }
+
+    _windowTitle(window) {
+        const title = window?.title;
+        return typeof title === 'string' ? title.replace(/[\r\n]+/g, ' ') : '(untitled)';
     }
 
 }

@@ -30,7 +30,16 @@ class GuiProbeService extends BaseService {
             return this._result(Result.FAILED, error.message);
         }
 
+        const gui = this.service('gui');
+        const ownerResult = gui?.acquire?.('gui-probe');
+        if (ownerResult && ownerResult !== Result.SUCCESS) {
+            this.debug(`GUI probe skipped; owner=${gui.owner?.() || 'unknown'}.`);
+            return this._result(Result.BUSY, 'GUI đang bận bởi workflow khác; đã bỏ qua scan.');
+        }
+
         this.running = true;
+        this.openedWindows = new Set();
+        this.debug('GUI probe started.');
         const snapshots = [];
         try {
             for (const action of actions) {
@@ -44,6 +53,9 @@ class GuiProbeService extends BaseService {
             return this._result(Result.FAILED, error.message, snapshots);
         } finally {
             this.running = false;
+            this.openedWindows = null;
+            gui?.release?.('gui-probe');
+            this.debug('GUI probe finished.');
         }
     }
 
@@ -83,6 +95,7 @@ class GuiProbeService extends BaseService {
             const result = await this.service('chat').sendCommand(action.command);
             if (result !== Result.SUCCESS) return { result, message: `Không gửi được ${action.command}: ${result}.` };
             const changed = await this._waitForWindowChange(previous, this._windowTimeout());
+            if (changed && gui.window()) this.openedWindows?.add(gui.window());
             const snapshot = this._logWindow(`sau ${action.command}${changed ? '' : ' (không thấy GUI mới)'}`);
             return changed
                 ? { result: Result.SUCCESS, snapshot }
@@ -98,6 +111,7 @@ class GuiProbeService extends BaseService {
             const result = await gui.click(action.slot, action.button);
             if (result !== Result.SUCCESS) return { result, message: `Không click được ${action.token}: ${result}.` };
             const changed = await this._waitForWindowChange(window, this._windowTimeout());
+            if (changed && gui.window()) this.openedWindows?.add(gui.window());
             return { result: Result.SUCCESS, snapshot: this._logWindow(`sau ${action.token}${changed ? '' : ' (GUI không đổi)'}`) };
         }
 
@@ -108,6 +122,9 @@ class GuiProbeService extends BaseService {
 
         if (action.type === 'inspect') return { result: Result.SUCCESS, snapshot: this._logWindow('inspect') };
 
+        if (!this.openedWindows?.has(gui.window())) {
+            return { result: Result.GUI_NOT_FOUND, message: 'GUI hiện tại không do scan này mở; không đóng.' };
+        }
         const result = await gui.close();
         if (result !== Result.SUCCESS) return { result, message: `Không đóng được GUI: ${result}.` };
         return { result, snapshot: this._logWindow('sau close') };

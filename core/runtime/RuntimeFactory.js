@@ -31,7 +31,9 @@ function createRuntime() {
             reconnectCount: 0,
             lastDisconnect: null,
             lastKickReason: null,
-            resourcePackAccepted: false
+            resourcePackAccepted: false,
+            authenticated: false,
+            lastAuthenticatedAt: null
         },
 
         /**

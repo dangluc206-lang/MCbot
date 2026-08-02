@@ -2,7 +2,14 @@
 
 const BaseService = require('../core/base/BaseService');
 const Result = require('../core/constants/Result');
-const { compactItemLabel, normalizeItemLabel } = require('../utils/ItemLabels');
+const Events = require('../core/constants/Events');
+const { normalizeItemLabel } = require('../utils/ItemLabels');
+const RecipeIdentity = require('../utils/CraftingRecipeIdentity');
+const CraftingPlan = require('../utils/CraftingPlan');
+const { withdrawVaultItems } = require('../actions/CraftingVaultAction');
+const CraftingRootScreen = require('../screens/CraftingRootScreen');
+const CraftingRecipeScreen = require('../screens/CraftingRecipeScreen');
+const CraftAmountScreen = require('../screens/CraftAmountScreen');
 
 const DEFAULT_RECIPES = Object.freeze({
     10: { itemKey: 'super_cobblestone', name: 'Siêu đá cuội', inputs: [{ item: 'cobblestone', amount: 16 }] },
@@ -146,58 +153,7 @@ class CraftingService extends BaseService {
      * @param {Number} targetCount
      */
     plan(targetSlot = this.settings().targetSlot, targetCount = this.settings().targetCount) {
-        const settings = this.settings();
-        const slot = Number(targetSlot);
-        const count = Number(targetCount);
-        if (!Number.isInteger(slot) || !settings.recipes[slot]) throw new Error(`Không có recipe ở slot ${targetSlot}.`);
-        if (!Number.isInteger(count) || count < 1 || count > 64) throw new Error('Số lượng Siêu Hợp Kim phải từ 1 đến 64.');
-
-        const required = new Map();
-        const raw = new Map();
-        const add = (map, key, amount) => map.set(key, (map.get(key) || 0) + amount);
-        const expand = (recipeSlot, amount, path = new Set()) => {
-            if (path.has(recipeSlot)) throw new Error(`Recipe bị vòng lặp ở slot ${recipeSlot}.`);
-            const recipe = settings.recipes[recipeSlot];
-            if (!recipe) throw new Error(`Thiếu recipe cho slot ${recipeSlot}.`);
-            add(required, recipeSlot, amount);
-            const nextPath = new Set(path).add(recipeSlot);
-            for (const input of recipe.inputs || []) {
-                const inputAmount = Number(input.amount);
-                if (!Number.isInteger(inputAmount) || inputAmount < 1) throw new Error(`Recipe slot ${recipeSlot} có số lượng nguyên liệu không hợp lệ.`);
-                if (Number.isInteger(input.slot)) expand(input.slot, amount * inputAmount, nextPath);
-                else if (input.item) add(raw, input.item, amount * inputAmount);
-                else throw new Error(`Recipe slot ${recipeSlot} có nguyên liệu không hợp lệ.`);
-            }
-        };
-        expand(slot, count);
-
-        const order = [];
-        const visited = new Set();
-        const visit = recipeSlot => {
-            if (visited.has(recipeSlot)) return;
-            visited.add(recipeSlot);
-            for (const input of settings.recipes[recipeSlot].inputs || []) {
-                if (Number.isInteger(input.slot)) visit(input.slot);
-            }
-            order.push(recipeSlot);
-        };
-        visit(slot);
-
-        const actions = order.map(recipeSlot => ({
-            slot: recipeSlot,
-            itemKey: this._recipeItemKey(recipeSlot, settings),
-            name: settings.recipes[recipeSlot].name || `Slot ${recipeSlot}`,
-            count: required.get(recipeSlot) || 0
-        }));
-        return {
-            targetSlot: slot,
-            targetItemKey: this._recipeItemKey(slot, settings),
-            targetCount: count,
-            targetName: settings.recipes[slot].name || `Slot ${slot}`,
-            actions,
-            rawRequirements: [...raw.entries()].map(([item, amount]) => ({ item, amount })),
-            totalActions: actions.reduce((total, action) => total + action.count, 0)
-        };
+        return CraftingPlan.buildPlan(this.settings(), targetSlot, targetCount);
     }
 
     /**
@@ -206,69 +162,7 @@ class CraftingService extends BaseService {
      * materials, then emitted in normal child-first crafting order.
      */
     planUsingExisting(basePlan, supplies, settings = this.settings()) {
-        const needed = new Map([[basePlan.targetSlot, basePlan.targetCount]]);
-        const actionCounts = new Map();
-        const raw = new Map();
-        const existing = new Map();
-        const add = (map, key, amount) => map.set(key, (map.get(key) || 0) + amount);
-
-        for (const action of [...basePlan.actions].reverse()) {
-            const required = needed.get(action.slot) || 0;
-            const supply = supplies.get(action.slot) || { inventory: 0, storage: 0, vault: 0 };
-            // targetCount means "create this many NEW target items". An SHK
-            // already in inventory, /pv 2, or /kho is completed stock, never
-            // an input which can satisfy the current craft request. All
-            // intermediate recipes still consume existing stock normally.
-            const isTarget = action.slot === basePlan.targetSlot;
-            const inventoryUsed = isTarget ? 0 : Math.min(required, supply.inventory || 0);
-            // `/ks` consumes player-carried intermediate components. `/kho`
-            // is intentionally B1-only: the server draws raw inputs from it
-            // while crafting B2, but B2/B3/B4 shown there must never be
-            // treated as player-carried stock. Only inventory and `/pv 2`
-            // can satisfy an intermediate dependency.
-            const vaultUsed = isTarget ? 0 : Math.min(required - inventoryUsed, supply.vault || 0);
-            const storageUsed = 0;
-            const craftCount = required - inventoryUsed - vaultUsed - storageUsed;
-            existing.set(action.slot, {
-                slot: action.slot,
-                name: action.name,
-                inventoryAvailable: supply.inventory || 0,
-                storageAvailable: supply.storage || 0,
-                vaultAvailable: supply.vault || 0,
-                inventoryUsed,
-                storageUsed,
-                vaultUsed
-            });
-            actionCounts.set(action.slot, craftCount);
-            if (craftCount <= 0) continue;
-
-            const recipe = settings.recipes[action.slot];
-            for (const input of recipe.inputs || []) {
-                const amount = Number(input.amount) * craftCount;
-                if (Number.isInteger(input.slot)) add(needed, input.slot, amount);
-                else if (input.item) add(raw, input.item, amount);
-            }
-        }
-
-        const actions = basePlan.actions
-            .map(action => ({ ...action, count: actionCounts.get(action.slot) || 0 }))
-            .filter(action => action.count > 0);
-        const existingItems = [...existing.values()];
-        return {
-            ...basePlan,
-            actions,
-            rawRequirements: [...raw.entries()].map(([item, amount]) => ({ item, amount })),
-            totalActions: actions.reduce((total, action) => total + action.count, 0),
-            existingItems,
-            vaultWithdrawals: existingItems
-                .filter(item => item.vaultUsed > 0)
-                .map(item => ({
-                    slot: item.slot,
-                    name: item.name,
-                    aliases: this._recipeAliases(item.slot, item.name, settings),
-                    amount: item.vaultUsed
-                }))
-        };
+        return CraftingPlan.reducePlanUsingExisting(basePlan, supplies, settings);
     }
 
     /**
@@ -289,138 +183,18 @@ class CraftingService extends BaseService {
      * @returns {Object}
      */
     planCraftableStages(plan, availability, settings = this.settings()) {
-        const rawAvailable = new Map();
-        for (const material of availability?.materials || []) {
-            rawAvailable.set(
-                material.item,
-                Number.isFinite(material.available) ? Math.max(0, material.available) : 0
-            );
-        }
-
-        const products = new Map();
-        for (const item of plan.existingItems || []) {
-            products.set(item.slot, {
-                inventory: Math.max(0, Number(item.inventoryUsed) || 0),
-                crafted: 0,
-                storage: Math.max(0, Number(item.storageUsed) || 0),
-                vault: Math.max(0, Number(item.vaultUsed) || 0),
-                vaultConsumed: 0
-            });
-        }
-        const productFor = slot => {
-            if (!products.has(slot)) {
-                products.set(slot, { inventory: 0, crafted: 0, storage: 0, vault: 0, vaultConsumed: 0 });
-            }
-            return products.get(slot);
-        };
-        const productAmount = slot => {
-            const product = productFor(slot);
-            return product.inventory + product.crafted + product.storage + product.vault;
-        };
-        const consumeProduct = (slot, amount) => {
-            const product = productFor(slot);
-            let remaining = amount;
-            for (const source of ['inventory', 'vault', 'storage', 'crafted']) {
-                const used = Math.min(remaining, product[source]);
-                product[source] -= used;
-                remaining -= used;
-                if (source === 'vault') product.vaultConsumed += used;
-                if (remaining <= 0) break;
-            }
-        };
-        const produceProduct = (slot, amount) => {
-            productFor(slot).crafted += amount;
-        };
-
-        const actions = [];
-        const deferredActions = [];
-        const rawRequirements = new Map();
-        const addRawRequirement = (item, amount) => {
-            rawRequirements.set(item, (rawRequirements.get(item) || 0) + amount);
-        };
-
-        for (const action of plan.actions || []) {
-            const recipe = settings.recipes?.[action.slot];
-            if (!recipe) {
-                deferredActions.push({ ...action, reason: `Thiếu recipe slot ${action.slot}.` });
-                continue;
-            }
-
-            let executable = Math.max(0, Number(action.count) || 0);
-            const requirements = [];
-            for (const input of recipe.inputs || []) {
-                const perCraft = Math.max(0, Number(input.amount) || 0);
-                if (perCraft <= 0) continue;
-                const sourceAvailable = Number.isInteger(input.slot)
-                    ? productAmount(input.slot)
-                    : (rawAvailable.get(input.item) || 0);
-                executable = Math.min(executable, Math.floor(sourceAvailable / perCraft));
-                requirements.push({ ...input, perCraft, sourceAvailable });
-            }
-
-            if (executable <= 0) {
-                const blockers = requirements
-                    .filter(input => input.sourceAvailable < input.perCraft)
-                    .map(input => Number.isInteger(input.slot)
-                        ? `slot ${input.slot} (${input.sourceAvailable}/${input.perCraft})`
-                        : `${input.item} (${input.sourceAvailable}/${input.perCraft})`);
-                deferredActions.push({
-                    ...action,
-                    reason: blockers.length ? `Thiếu ${blockers.join(', ')}` : 'Chưa có đầu vào.'
-                });
-                continue;
-            }
-
-            for (const input of requirements) {
-                const consumed = executable * input.perCraft;
-                if (Number.isInteger(input.slot)) consumeProduct(input.slot, consumed);
-                else {
-                    rawAvailable.set(input.item, Math.max(0, (rawAvailable.get(input.item) || 0) - consumed));
-                    addRawRequirement(input.item, consumed);
-                }
-            }
-            produceProduct(action.slot, executable);
-            actions.push({ ...action, count: executable });
-            if (executable < action.count) {
-                deferredActions.push({
-                    ...action,
-                    count: action.count - executable,
-                    reason: `Chỉ đủ nguyên liệu cho ${executable}/${action.count}.`
-                });
-            }
-        }
-
-        const existingBySlot = new Map((plan.existingItems || []).map(item => [item.slot, item]));
-        const vaultWithdrawals = [...products.entries()]
-            .filter(([, product]) => product.vaultConsumed > 0)
-            .map(([slot, product]) => {
-                const item = existingBySlot.get(slot);
-                return {
-                    slot,
-                    name: item?.name || settings.recipes?.[slot]?.name || `Slot ${slot}`,
-                    aliases: this._recipeAliases(slot, item?.name || settings.recipes?.[slot]?.name || `Slot ${slot}`, settings),
-                    amount: product.vaultConsumed
-                };
-            });
-
-        return {
-            ...plan,
-            actions,
-            rawRequirements: [...rawRequirements.entries()].map(([item, amount]) => ({ item, amount })),
-            totalActions: actions.reduce((total, action) => total + action.count, 0),
-            deferredActions,
-            partial: deferredActions.length > 0,
-            vaultWithdrawals
-        };
+        return CraftingPlan.planCraftableStages(plan, availability, settings);
     }
 
     /** Withdraws only the /pv 2 items consumed by the current craft stage. */
     async _withdrawVaultItems(requests) {
-        if (!Array.isArray(requests) || requests.length === 0) return Result.NO_ACTION;
-        const result = await this.service('personalVault')?.withdraw?.(requests);
-        if (result !== Result.SUCCESS && result !== Result.NO_ACTION) return result || Result.FAILED;
-        this.service('inventory')?.sync?.({ emit: false });
-        return result;
+        const vault = this.service('personalVault');
+        return withdrawVaultItems(
+            requests,
+            items => vault?.withdraw?.(items, { guiOwner: 'crafting' }),
+            this.service('inventory')?.sync?.bind(this.service('inventory')),
+            Result
+        );
     }
 
     /**
@@ -441,33 +215,12 @@ class CraftingService extends BaseService {
 
         const recipe = this.run.settings.recipes?.[Number(action.slot)] || {};
         const definitions = this._materialDefinitions(this.run.settings);
-        const requests = [];
-        const missing = [];
-        for (const input of recipe.inputs || []) {
-            if (!Number.isInteger(input?.slot)) continue;
-            const definition = definitions.get(Number(input.slot));
-            if (!definition) continue;
-            const required = Math.max(0, Math.floor(Number(input.amount) || 0));
-            if (required <= 0) continue;
-
-            const carried = this._countMaterialInInventory(definition.slot);
-            const needed = Math.max(0, required - carried);
-            if (needed <= 0) continue;
-
-            const inVault = this._countMaterialInVault(definition.slot, definitions);
-            const amount = Math.min(needed, inVault);
-            if (amount > 0) {
-                requests.push({
-                    slot: definition.slot,
-                    name: definition.name,
-                    aliases: definition.aliases,
-                    amount
-                });
-            }
-            if (amount < needed) {
-                missing.push({ name: definition.name, amount: needed - amount });
-            }
-        }
+        const { requests, missing } = RecipeIdentity.vaultInputRequirements(
+            recipe,
+            definitions,
+            slot => this._countMaterialInInventory(slot),
+            slot => this._countMaterialInVault(slot, definitions)
+        );
 
         if (missing.length > 0) {
             return this._fail(
@@ -508,24 +261,16 @@ class CraftingService extends BaseService {
     /** @private */
     _countMaterialInVault(slot, definitions = this._materialDefinitions(this.run?.settings || this.settings())) {
         const definition = definitions.get(Number(slot));
-        if (!definition) return 0;
         const items = this.service('personalVault')?.getItems?.() || this.state.personalVault?.items || [];
-        return items.reduce((total, item) => (
-            this._matchMaterialDefinition(item, new Map([[definition.slot, definition]]))
-                ? total + Math.max(0, Number(item?.count) || 0)
-                : total
-        ), 0);
+        return RecipeIdentity.countMaterial(items, definition);
     }
 
     /** @private */
     _recordActualVaultWithdrawals(requests) {
-        const totals = new Map((this.run.actualVaultWithdrawals || []).map(item => [item.slot, { ...item }]));
-        for (const request of requests) {
-            const current = totals.get(request.slot) || { ...request, amount: 0 };
-            current.amount += Math.max(0, Number(request.amount) || 0);
-            totals.set(request.slot, current);
-        }
-        this.run.actualVaultWithdrawals = [...totals.values()];
+        this.run.actualVaultWithdrawals = RecipeIdentity.mergeVaultWithdrawals(
+            this.run.actualVaultWithdrawals || [],
+            requests
+        );
     }
 
     /**
@@ -535,44 +280,14 @@ class CraftingService extends BaseService {
      */
     buildMaterialLedger(settings = this.settings()) {
         const definitions = this._materialDefinitions(settings);
-        const supplies = new Map([...definitions.keys()].map(slot => [slot, {
-            inventory: 0,
-            storage: 0,
-            vault: 0
-        }]));
-        const addItems = (items, source, quantityFor) => {
-            for (const item of items || []) {
-                const count = Number(quantityFor(item));
-                if (!Number.isFinite(count) || count <= 0) continue;
-                const definition = this._matchMaterialDefinition(item, definitions);
-                if (!definition) continue;
-                supplies.get(definition.slot)[source] += count;
-            }
-        };
         const inventoryItems = this.service('inventory')?.getItems?.() || this.state.inventory.items || [];
         const vaultItems = this.service('personalVault')?.getItems?.() || this.state.personalVault?.items || [];
         const storageItems = this.state.storage?.gui?.items || [];
-        addItems(inventoryItems, 'inventory', item => item?.count);
-        addItems(vaultItems, 'vault', item => item?.count);
-        addItems(storageItems, 'storage', item => Number.isFinite(item?.amount) ? item.amount : item?.count);
-
-        const entries = [...definitions.values()].map(definition => {
-            const source = supplies.get(definition.slot);
-            return {
-                slot: definition.slot,
-                itemKey: definition.itemKey,
-                name: definition.name,
-                inventory: source.inventory,
-                storage: source.storage,
-                vault: source.vault,
-                total: source.inventory + source.storage + source.vault
-            };
+        return RecipeIdentity.buildMaterialLedger(definitions, {
+            inventory: inventoryItems,
+            vault: vaultItems,
+            storage: storageItems
         });
-        return {
-            updatedAt: Date.now(),
-            entries,
-            total: entries.reduce((sum, item) => sum + item.total, 0)
-        };
     }
 
     /**
@@ -632,48 +347,16 @@ class CraftingService extends BaseService {
     }
 
     _materialDefinitions(settings = this.settings()) {
-        const definitions = new Map();
-        for (const [slot, recipe] of Object.entries(settings.recipes || {})) {
-            const numericSlot = Number(slot);
-            if (!Number.isInteger(numericSlot)) continue;
-            definitions.set(numericSlot, {
-                slot: numericSlot,
-                itemKey: this._recipeItemKey(numericSlot, settings),
-                name: recipe.name || `Slot ${numericSlot}`,
-                aliases: this._recipeAliases(numericSlot, recipe.name || `Slot ${numericSlot}`, settings)
-            });
-        }
-        return definitions;
+        return RecipeIdentity.materialDefinitions(settings);
     }
 
     _matchMaterialDefinition(item, definitions) {
-        const allLabels = item?.labels || item?.lines || [item?.displayName, item?.name, item?.itemName];
-        // The first visible text is the item's custom display name. Lore also
-        // contains recipe descriptions, so only the display name may use the
-        // forgiving variant matcher; otherwise an unrelated item can be
-        // counted because its lore mentions a material.
-        const identityLabels = [item?.displayName, allLabels[0]]
-            .filter(label => typeof label === 'string' && label.trim());
-        const candidates = [...definitions.values()];
-        const exact = candidates.find(candidate => allLabels
-            .some(label => this._matchesRecipeItem(label, candidate)));
-        if (exact) return exact;
-
-        // "Khối vàng tinh luyện" also contains "Vàng tinh luyện". Choose
-        // the most-specific alias so the block maps to slot 25, not slot 15.
-        return candidates
-            .filter(candidate => identityLabels
-                .some(label => this._matchesRecipeItemVariant(label, candidate)))
-            .sort((left, right) => this._longestRecipeAlias(right) - this._longestRecipeAlias(left))[0] || null;
+        return RecipeIdentity.matchMaterialDefinition(item, definitions);
     }
 
     _recipeSupplies(settings = this.settings()) {
         const ledger = this.buildMaterialLedger(settings);
-        const supplies = new Map(ledger.entries.map(item => [item.slot, {
-            inventory: item.inventory,
-            storage: item.storage,
-            vault: item.vault
-        }]));
+        const supplies = RecipeIdentity.suppliesFromLedger(ledger);
         this._setLedger(ledger);
         return supplies;
     }
@@ -685,37 +368,15 @@ class CraftingService extends BaseService {
      * `itemKey`.
      */
     _recipeItemKey(slot, settings = this.settings()) {
-        const configured = settings.recipes?.[slot]?.itemKey;
-        if (typeof configured === 'string' && configured.trim()) {
-            return configured.trim().toLowerCase();
-        }
-        return `recipe_${Number(slot)}`;
+        return RecipeIdentity.recipeItemKey(slot, settings);
     }
 
     _recipeAliases(slot, name, settings = this.settings()) {
-        const itemKey = this._recipeItemKey(slot, settings);
-        const modern = settings.materialAliases?.[itemKey]
-            || settings.materialAliases?.[slot]
-            || settings.materialAliases?.[String(slot)]
-            || [];
-        const legacy = settings.personalVault?.aliases?.[itemKey]
-            || settings.personalVault?.aliases?.[slot]
-            || settings.personalVault?.aliases?.[String(slot)]
-            || [];
-        return [...new Set([name,
-            ...(Array.isArray(modern) ? modern : [modern]),
-            ...(Array.isArray(legacy) ? legacy : [legacy])]
-            .filter(value => typeof value === 'string' && value.trim()))];
+        return RecipeIdentity.recipeAliases(slot, name, settings);
     }
 
     _matchesRecipeItem(label, definition) {
-        const normalized = this._normalizeItemLabel(label);
-        const compact = compactItemLabel(label);
-        return definition.aliases.some(alias => {
-            const normalizedAlias = this._normalizeItemLabel(alias);
-            return normalizedAlias === normalized
-                || (compact.length >= 6 && compactItemLabel(alias) === compact);
-        });
+        return RecipeIdentity.matchesRecipeItem(label, definition);
     }
 
     /**
@@ -725,24 +386,15 @@ class CraftingService extends BaseService {
      * recipe ingredients and would create false ledger entries.
      */
     _matchesRecipeItemVariant(label, definition) {
-        const normalizedLabel = this._normalizeItemLabel(label);
-        if (!normalizedLabel) return false;
-        return definition.aliases.some(alias => {
-            const normalizedAlias = this._normalizeItemLabel(alias);
-            return normalizedAlias.length >= 8 && normalizedLabel.includes(normalizedAlias);
-        });
+        return RecipeIdentity.matchesRecipeItemVariant(label, definition);
     }
 
     _longestRecipeAlias(definition) {
-        return Math.max(0, ...definition.aliases.map(alias => this._normalizeItemLabel(alias).length));
+        return RecipeIdentity.longestRecipeAlias(definition);
     }
 
     _describeLedgerIntermediates(ledger) {
-        const usefulSlots = new Set([10, 11, 12, 13, 14, 15, 16, 19, 20, 21, 22, 23, 24, 25, 28, 29, 30, 31, 32, 33]);
-        const entries = (ledger?.entries || [])
-            .filter(item => usefulSlots.has(item.slot) && item.total > 0)
-            .map(item => `#${item.slot} ${item.name}: inv=${item.inventory}, pv2=${item.vault}, kho=${item.storage}`);
-        return entries.length ? entries.join(' | ') : 'không nhận diện được vật liệu SHK nào.';
+        return RecipeIdentity.describeLedgerIntermediates(ledger);
     }
 
     _trimDiagnostic(value, maxLength = 240) {
@@ -767,112 +419,12 @@ class CraftingService extends BaseService {
      */
     assessStorage(plan, settings = this.settings()) {
         const snapshots = this.state.storage?.gui?.items || [];
-        const bySlot = new Map(snapshots.map(item => [item.slot, item]));
-        const byName = new Map();
-        for (const snapshot of snapshots) {
-            if (!snapshot?.itemName || !Number.isFinite(snapshot.amount)) continue;
-            byName.set(snapshot.itemName, (byName.get(snapshot.itemName) || 0) + snapshot.amount);
-        }
-        const inventoryByName = new Map();
         const inventoryItems = this.service('inventory')?.getItems?.() || this.state.inventory?.items || [];
-        for (const item of inventoryItems) {
-            const itemName = item?.itemName || item?.name;
-            const count = Number(item?.count);
-            if (!itemName || !Number.isFinite(count) || count <= 0) continue;
-            inventoryByName.set(itemName, (inventoryByName.get(itemName) || 0) + count);
-        }
-
-        const blockEquivalents = {
-            coal: [{ slot: 11, itemName: 'coal_block', multiplier: 9 }],
-            diamond: [{ slot: 14, itemName: 'diamond_block', multiplier: 9 }],
-            emerald: [{ slot: 16, itemName: 'emerald_block', multiplier: 9 }],
-            gold_ingot: [{ slot: 19, itemName: 'gold_block', multiplier: 9 }, { slot: 21, itemName: 'gold_ore', multiplier: 1 }],
-            iron_ingot: [{ slot: 22, itemName: 'iron_block', multiplier: 9 }, { slot: 24, itemName: 'iron_ore', multiplier: 1 }],
-            lapis_lazuli: [{ slot: 25, itemName: 'lapis_block', multiplier: 9 }],
-            redstone: [{ slot: 32, itemName: 'redstone_block', multiplier: 9 }]
-        };
-        const sourceFor = item => {
-            const configuredSlot = Number(settings.storageMaterialSlots?.[item]);
-            const slotItem = Number.isInteger(configuredSlot) ? bySlot.get(configuredSlot) : null;
-            const storagePrimary = slotItem?.amount;
-            const inventoryPrimary = inventoryByName.get(item) || 0;
-            const equivalents = blockEquivalents[item] || [];
-            const storageEquivalentAmounts = equivalents.map(source => {
-                const amount = bySlot.get(source.slot)?.amount;
-                return Number.isFinite(amount) ? amount * source.multiplier : null;
-            });
-            const inventoryEquivalentAmount = equivalents.reduce(
-                (total, source) => total + ((inventoryByName.get(source.itemName) || 0) * source.multiplier),
-                0
-            );
-            const usesConfiguredSlots = Number.isInteger(configuredSlot) || equivalents.length > 0;
-            if (usesConfiguredSlots) {
-                // A readable primary material is enough to prove a recipe is
-                // feasible by itself. Unknown optional block slots must not
-                // prevent Collector from starting a valid SHK run.
-                const storageKnown = Number.isFinite(storagePrimary);
-                const knownEquivalentAmounts = storageEquivalentAmounts
-                    .filter(Number.isFinite);
-                const storageAvailable = storageKnown
-                    ? storagePrimary + knownEquivalentAmounts.reduce((total, amount) => total + amount, 0)
-                    : null;
-                return {
-                    primary: (Number.isFinite(storagePrimary) ? storagePrimary : 0) + inventoryPrimary,
-                    compressed: (storageKnown ? knownEquivalentAmounts.reduce((total, amount) => total + amount, 0) : 0) + inventoryEquivalentAmount,
-                    storageAvailable,
-                    inventoryAvailable: inventoryPrimary + inventoryEquivalentAmount,
-                    known: storageKnown
-                };
-            }
-            const fallback = byName.get(item);
-            const storageKnown = Number.isFinite(fallback);
-            return {
-                primary: (storageKnown ? fallback : 0) + inventoryPrimary,
-                compressed: 0,
-                storageAvailable: storageKnown ? fallback : null,
-                inventoryAvailable: inventoryPrimary,
-                known: storageKnown
-            };
-        };
-        const materials = plan.rawRequirements.map(requirement => {
-            const source = sourceFor(requirement.item);
-            const inventoryAvailable = source.inventoryAvailable;
-            const storageAvailable = source.known ? source.storageAvailable || 0 : 0;
-            // Inventory is authoritative too: if it alone covers the recipe,
-            // crafting may proceed even while a custom /kho item lacks lore.
-            const certainAvailable = inventoryAvailable + storageAvailable;
-            const known = source.known || certainAvailable >= requirement.amount;
-            const available = known ? certainAvailable : null;
-            return {
-                item: requirement.item,
-                required: requirement.amount,
-                direct: source.primary,
-                compressed: source.compressed,
-                rawItem: null,
-                raw: null,
-                inventory: inventoryAvailable,
-                available,
-                shortage: Number.isFinite(available) ? Math.max(0, requirement.amount - available) : null,
-                enough: Number.isFinite(available) && available >= requirement.amount
-            };
-        });
-        return {
-            checkedAt: Date.now(),
-            materials,
-            canCraft: materials.every(material => material.enough),
-            missing: materials.filter(material => !material.enough)
-        };
+        return CraftingPlan.assessStorage(plan, settings, snapshots, inventoryItems);
     }
 
     describeAvailability(availability) {
-        if (!availability?.materials?.length) return 'Không có dữ liệu nguyên liệu từ /kho.';
-        if (availability.canCraft) return 'Kho đủ nguyên liệu để chế tạo mục tiêu.';
-        return availability.missing.map(material => {
-            if (!Number.isFinite(material.available)) {
-                return `${material.item}: chưa đọc được số lượng`;
-            }
-            return `${material.item}: thiếu ${material.shortage.toLocaleString('vi-VN')} (${material.available.toLocaleString('vi-VN')}/${material.required.toLocaleString('vi-VN')})`;
-        }).join('; ');
+        return CraftingPlan.describeAvailability(availability);
     }
 
     /**
@@ -912,61 +464,17 @@ class CraftingService extends BaseService {
      * @returns {Array<{slot:Number,name:String,count:Number}>}
      */
     createInventorySafeActions(plan, settings = this.settings()) {
-        const remaining = new Map((plan?.actions || []).map(action => [
-            action.slot,
-            Math.max(0, Number(action.count) || 0)
-        ]));
-        const actions = [];
-        const b2BatchSize = this._bounded(Number(settings.b2BatchSize), 1, 64, 16);
-        const append = slot => {
-            const previous = actions.at(-1);
-            const tier = this._recipeTier(slot, settings);
-            const mayExtendPrevious = previous?.slot === slot
-                && (tier !== 2 || previous.count < b2BatchSize);
-            if (mayExtendPrevious) {
-                previous.count += 1;
-                return;
-            }
-            actions.push({
-                slot,
-                itemKey: this._recipeItemKey(slot, settings),
-                name: settings.recipes?.[slot]?.name || `Slot ${slot}`,
-                count: 1
-            });
-        };
-        const emit = (slot, count) => {
-            const available = remaining.get(slot) || 0;
-            const requested = Math.min(Math.max(0, Number(count) || 0), available);
-            if (requested <= 0) return;
-            remaining.set(slot, available - requested);
-
-            const recipe = settings.recipes?.[slot];
-            for (let index = 0; index < requested; index += 1) {
-                for (const input of recipe?.inputs || []) {
-                    if (Number.isInteger(input.slot)) emit(input.slot, input.amount);
-                }
-                append(slot);
-            }
-        };
-
-        // Start at final products. Remaining partial branches are emitted in
-        // reverse dependency order after the final target is satisfied.
-        for (const action of [...(plan?.actions || [])].reverse()) {
-            emit(action.slot, remaining.get(action.slot));
-        }
-        return actions;
+        return CraftingPlan.createInventorySafeActions(plan, settings);
     }
 
     /** Returns the SHK stack created by a completed run, if one was created. */
     getCompletedTargetDepositRequest() {
-        if (!this.succeeded() || !this.run?.settings || !this.run?.plan) return null;
-        const amount = this.getCraftedTargetCount();
-        if (amount <= 0) return null;
-        return {
-            name: this.run.plan.targetName,
-            aliases: this._recipeAliases(this.run.plan.targetSlot, this.run.plan.targetName, this.run.settings),
-            amount
-        };
+        return RecipeIdentity.completedTargetDepositRequest(
+            this.succeeded(),
+            this.run?.plan,
+            this.run?.settings,
+            this.run?.targetCraftCount
+        );
     }
 
     /**
@@ -980,31 +488,18 @@ class CraftingService extends BaseService {
         if (!this.run?.settings) return [];
         const settings = this.run.settings;
         const definitions = this._materialDefinitions(settings);
-        const totals = new Map();
         const items = this.service('inventory')?.getItems?.() || this.state.inventory?.items || [];
-        for (const item of items) {
-            const definition = this._matchMaterialDefinition(item, definitions);
-            if (!definition) continue;
-            const tier = this._recipeTier(definition.slot, settings);
-            if (tier === null || tier < 2 || tier > 4) continue;
-            totals.set(definition.slot, (totals.get(definition.slot) || 0) + Math.max(0, Number(item.count) || 0));
-        }
-        return [...totals.entries()]
-            .filter(([, amount]) => amount > 0)
-            .map(([slot, amount]) => {
-                const definition = definitions.get(slot);
-                return {
-                    name: definition.name,
-                    aliases: this._recipeAliases(slot, definition.name, settings),
-                    amount
-                };
-            });
+        return RecipeIdentity.intermediateRecoveryDepositRequests(
+            items,
+            definitions,
+            settings,
+            slot => this._recipeTier(slot, settings)
+        );
     }
 
     /** Number of configured target items actually created by GUI clicks. */
     getCraftedTargetCount() {
-        if (!this.succeeded()) return 0;
-        return Math.max(0, Number(this.run?.targetCraftCount) || 0);
+        return RecipeIdentity.craftedTargetCount(this.succeeded(), this.run?.targetCraftCount);
     }
 
     getMaterialLedger() {
@@ -1035,6 +530,9 @@ class CraftingService extends BaseService {
             return Result.FAILED;
         }
 
+        const guiOwner = this.service('gui')?.acquire?.('crafting');
+        if (guiOwner && guiOwner !== Result.SUCCESS) return Result.BUSY;
+
         this.run = {
             active: true,
             status: 'CHECKING_STORAGE',
@@ -1061,6 +559,8 @@ class CraftingService extends BaseService {
             nextAt: 0,
             guiDeadline: 0,
             previousWindow: null,
+            openingGuiWindow: null,
+            removeOpeningGuiListener: null,
             openedWindow: null,
             entryGuiUpdatedAt: 0,
             loggedActionIndex: -1,
@@ -1092,7 +592,7 @@ class CraftingService extends BaseService {
                 const vaultSettings = this.run.settings.personalVault || {};
                 if (vaultSettings.enabled !== false) {
                     const personalVault = this.service('personalVault');
-                    const vaultResult = await personalVault?.refresh?.();
+                    const vaultResult = await personalVault?.refresh?.({ guiOwner: 'crafting' });
                     if (vaultResult !== Result.SUCCESS) {
                         return this._fail(vaultResult || Result.FAILED, `Không thể đọc /pv 2 trước khi chế tạo: ${vaultResult || Result.FAILED}.`);
                     }
@@ -1115,7 +615,8 @@ class CraftingService extends BaseService {
             const storageResult = await storage?.refreshStorageGui?.({
                 // Raw inputs may be needed for B1 immediately below. Nung is
                 // still allowed; packing waits until Collector is idle.
-                runCompression: false
+                runCompression: false,
+                guiOwner: 'crafting'
             });
             if (storageResult !== Result.SUCCESS) {
                 return this._fail(storageResult, `Không thể đọc /kho trước khi chế tạo: ${storageResult}.`);
@@ -1125,7 +626,8 @@ class CraftingService extends BaseService {
             // snapshot intentionally skips post-processing so it remains the
             // authoritative raw-vs-block source for the staged craft batch.
             const postProcessStorageResult = await storage.refreshStorageGui({
-                runPostProcessing: false
+                runPostProcessing: false,
+                guiOwner: 'crafting'
             });
             if (postProcessStorageResult !== Result.SUCCESS) {
                 return this._fail(
@@ -1257,8 +759,17 @@ class CraftingService extends BaseService {
         if (this.run.status === 'OPENING_GUI') {
             if (this._deferForPersonalVaultCooldown('OPENING_GUI', now)) return Result.PENDING;
             this.run.previousWindow = gui.window();
-            const result = await this.service('chat').sendCommand(this.run.settings.command);
-            if (result !== Result.SUCCESS) return this._fail(result, `Không gửi được ${this.run.settings.command}: ${result}.`);
+            const serverCommands = this.service('serverCommands');
+            if (!serverCommands?.openCraftingMenu) {
+                return this._fail(Result.FAILED, 'ServerCommandService chưa sẵn sàng để mở GUI chế tạo.');
+            }
+            const result = await serverCommands.openCraftingMenu({
+                beforeSend: () => this._listenForCraftingGui()
+            });
+            if (result !== Result.SUCCESS) {
+                this._clearCraftingGuiListener();
+                return this._fail(result, `Không gửi được ${this.run.settings.command}: ${result}.`);
+            }
             this.run.status = 'WAITING_GUI';
             // ChatService may wait six seconds after a previous GUI close
             // before it actually transmits /ks. The GUI timeout starts only
@@ -1270,15 +781,26 @@ class CraftingService extends BaseService {
         }
 
         if (this.run.status === 'WAITING_GUI') {
-            const window = gui.window();
+            const currentWindow = gui.window();
+            const window = this.run.openingGuiWindow || currentWindow;
             if (window && window !== this.run.previousWindow) {
-                const entrySlot = Number(this.run.settings.entrySlot);
+                // GUI.OPEN may arrive immediately before the server closes or
+                // replaces the window. Never validate a stale event window and
+                // then click whatever GUI happens to be current.
+                if (currentWindow !== window) {
+                    this._listenForCraftingGui();
+                    return Result.PENDING;
+                }
+                this._clearCraftingGuiListener();
+                const entrySlot = this._craftingRootScreen(gui).recipeListSlot();
                 if (!Number.isInteger(entrySlot) || !window.slots?.[entrySlot]) {
                     return this._fail(Result.GUI_NOT_FOUND, `GUI ${this.run.settings.command} không có slot vào chế tạo ${this.run.settings.entrySlot}.`);
                 }
+                this.info(`GUI ${this.run.settings.command} mở: title="${this._windowTitle(window)}", slot ${entrySlot}=${window.slots[entrySlot]?.displayName || window.slots[entrySlot]?.name || 'unknown'}.`);
                 this.run.previousWindow = window;
                 this.run.entryGuiUpdatedAt = this.state.gui.lastUpdate || 0;
-                const result = await gui.click(entrySlot, Number(this.run.settings.entryButton) || 0, 0);
+                this._listenForCraftingGui();
+                const result = await this._craftingRootScreen(gui).clickRecipeList();
                 if (result !== Result.SUCCESS) return this._fail(result, `Không click được slot ${entrySlot} để vào GUI chế tạo: ${result}.`);
                 this.run.status = 'WAITING_CRAFTING_GUI';
                 this.run.guiDeadline = Date.now() + this._bounded(this.run.settings.guiTimeoutMs, 1000, 15000, 5000);
@@ -1287,6 +809,7 @@ class CraftingService extends BaseService {
                 return Result.PENDING;
             }
             if (now >= this.run.guiDeadline) {
+                this._clearCraftingGuiListener();
                 return this._fail(Result.GUI_TIMEOUT, `GUI ${this.run.settings.command} không mở sau ${this.run.settings.guiTimeoutMs} ms.`);
             }
             return Result.PENDING;
@@ -1294,7 +817,11 @@ class CraftingService extends BaseService {
 
         if (this.run.status === 'WAITING_CRAFTING_GUI') {
             const window = gui.window();
+            const nextAction = this.run.plan.actions[this.run.actionIndex];
+            const recipeSlot = Number(nextAction?.slot);
+            const hasRecipeSlot = !Number.isInteger(recipeSlot) || Boolean(window?.slots?.[recipeSlot]);
             const changed = window
+                && hasRecipeSlot
                 && (window !== this.run.previousWindow || (this.state.gui.lastUpdate || 0) > this.run.entryGuiUpdatedAt);
             if (changed) {
                 this.run.openedWindow = window;
@@ -1362,17 +889,47 @@ class CraftingService extends BaseService {
             action,
             bulkCraft,
             shiftCraft,
-            outputBefore: shiftCraft ? this._countMaterialInInventory(action.slot) : null,
+            amountSelection: !usesShift,
+            outputBefore: bulkCraft ? null : this._countMaterialInInventory(action.slot),
             inventorySignature: this._inventorySignature(),
             guiUpdatedAt: this.state.gui.lastUpdate || 0,
             retryCount: this.run.actionRetryCount || 0,
             deadline: 0
         };
-        const result = await gui.click(
-            action.slot,
-            usesShift ? this._bulkCraftMouseButton() : 0,
-            usesShift ? this._bulkCraftMode() : 0
-        );
+        let result;
+        if (usesShift) {
+            result = await gui.click(
+                action.slot,
+                this._bulkCraftMouseButton(),
+                this._bulkCraftMode()
+            );
+        } else {
+            const recipe = {
+                slot: action.slot,
+                name: action.name,
+                aliases: this._recipeAliases(action.slot, action.name, this.run.settings)
+            };
+            const openedAmount = await this._craftingRecipeScreen(gui).clickRecipeAndWait(
+                recipe,
+                this._bounded(this.run.settings.guiTimeoutMs, 1000, 15000, 5000)
+            );
+            if (openedAmount.result === Result.SUCCESS) {
+                const amountWindow = openedAmount.window;
+                const ready = await this._waitForAmountWindowReady(gui, amountWindow);
+                if (ready !== Result.SUCCESS) {
+                    result = ready;
+                } else {
+                    const selected = await this._craftAmountScreen(gui).select('ONE', 0, 0, amountWindow);
+                    result = selected.result;
+                }
+            } else if (openedAmount.result === Result.NO_ACTION) {
+                pendingClick.amountSelection = false;
+                pendingClick.guiUpdatedAt = this.state.gui.lastUpdate || 0;
+                result = Result.SUCCESS;
+            } else {
+                result = openedAmount.result;
+            }
+        }
         if (result !== Result.SUCCESS) return this._fail(result, `Không click được slot ${action.slot}: ${result}.`);
         // clickWindow is asynchronous too; do not consume its acknowledgement
         // window while the request itself is still queued by the protocol.
@@ -1428,7 +985,8 @@ class CraftingService extends BaseService {
         const rawRequirements = this._rawRequirementsForAction(action);
         const unpackPlan = conversion?.getUnpackPlan?.(
             rawRequirements,
-            this.run.settings.storageMaterialSlots
+            this.run.settings.storageMaterialSlots,
+            { force: true }
         );
         if (!unpackPlan || unpackPlan.targets.length === 0) {
             this.run.preparedTier2ActionIndex = this.run.actionIndex;
@@ -1439,10 +997,21 @@ class CraftingService extends BaseService {
         if (gui?.isOpen?.()) await gui.close();
 
         const protectedItems = this._remainingTier2RawRequirements();
+        const capacitySnapshot = await storage?.refreshStorageGui?.({
+            runPostProcessing: false,
+            requireFreeSpace: true,
+            guiOwner: 'crafting'
+        });
+        if (capacitySnapshot !== Result.SUCCESS) {
+            return this._fail(
+                capacitySnapshot || Result.GUI_TIMEOUT,
+                `Không đọc được “Còn trống” /kho trước khi tách khối cho B2 ${action.name}: ${capacitySnapshot || Result.GUI_TIMEOUT}.`
+            );
+        }
         const reserved = await storage?.reserveCapacityForUnpack?.(
             rawRequirements,
             this.run.settings.storageMaterialSlots,
-            { protectedItems }
+            { protectedItems, forceUnpack: true, guiOwner: 'crafting' }
         );
         if (reserved !== Result.SUCCESS) {
             return this._fail(
@@ -1454,10 +1023,31 @@ class CraftingService extends BaseService {
         const unpacked = await storage?.prepareRawForCraft?.(
             rawRequirements,
             this.run.settings.storageMaterialSlots,
-            { capacityReserved: true, protectedItems }
+            { capacityReserved: true, protectedItems, forceUnpack: true, guiOwner: 'crafting' }
         );
         if (unpacked !== Result.SUCCESS && unpacked !== Result.NO_ACTION) {
             return this._fail(unpacked, `Không thể đổi khối về phôi cho B2 ${action.name}: ${unpacked}.`);
+        }
+
+        if (unpacked === Result.SUCCESS) {
+            const refreshed = await storage?.refreshStorageGui?.({
+                runPostProcessing: false,
+                guiOwner: 'crafting'
+            });
+            if (refreshed !== Result.SUCCESS) {
+                return this._fail(
+                    refreshed || Result.GUI_TIMEOUT,
+                    `Không đọc lại được /kho sau khi đổi khối cho B2 ${action.name}: ${refreshed || Result.GUI_TIMEOUT}.`
+                );
+            }
+
+            const missing = this._missingPreparedRawMaterials(rawRequirements);
+            if (missing.length > 0) {
+                return this._fail(
+                    Result.INSUFFICIENT_ITEMS,
+                    `Đổi khối chưa tạo đủ phôi/ngọc cho B2 ${action.name}: ${missing.join(', ')}.`
+                );
+            }
         }
 
         this.run.preparedTier2ActionIndex = this.run.actionIndex;
@@ -1479,6 +1069,26 @@ class CraftingService extends BaseService {
      * capacity buffer/sell policy before any later raw group can run.
      * @private
      */
+    _missingPreparedRawMaterials(requirements = []) {
+        const bySlot = new Map((this.state.storage?.gui?.items || [])
+            .map(item => [Number(item?.slot), item]));
+        return requirements.flatMap(requirement => {
+            const item = typeof requirement?.item === 'string' ? requirement.item.trim() : '';
+            const required = Number(requirement?.amount);
+            const slot = Number(this.run?.settings?.storageMaterialSlots?.[item]);
+            const available = Number(bySlot.get(slot)?.amount);
+            if (!item || !Number.isFinite(required) || required <= 0
+                || !Number.isInteger(slot) || !Number.isFinite(available) || available < required) {
+                const actual = Number.isFinite(available) ? available : '?';
+                const shortage = Number.isFinite(required)
+                    ? Math.max(0, required - (Number.isFinite(available) ? available : 0))
+                    : '?';
+                return [`${item || 'nguyên liệu'} thiếu ${shortage} (${actual}/${required})`];
+            }
+            return [];
+        });
+    }
+
     async _repackAfterTier2Group(completeAfterPacking = false) {
         const gui = this.service('gui');
         if (gui?.isOpen?.()) await gui.close();
@@ -1486,7 +1096,10 @@ class CraftingService extends BaseService {
         this.run.status = 'PROTECTING_STORAGE';
         this._setState('PROTECTING_STORAGE');
         const protectedItems = this._remainingTier2RawRequirements();
-        const result = await this.service('storage')?.repackAndProtectCapacity?.({ protectedItems });
+        const result = await this.service('storage')?.repackAndProtectCapacity?.({
+            protectedItems,
+            guiOwner: 'crafting'
+        });
         if (result !== Result.SUCCESS) {
             return this._fail(
                 result || Result.FAILED,
@@ -1506,13 +1119,12 @@ class CraftingService extends BaseService {
     }
 
     _shouldUseBulkCraft(action) {
-        const bulk = this.run?.settings?.bulkCraft || {};
-        if (bulk.enabled !== true || !action) return false;
-        // A custom GUI's shift-click makes items until inventory is full. It
-        // is never allowed for intermediate recipe nodes by default because
-        // that would create large amounts of materials unexpectedly.
-        if (bulk.finalTargetOnly !== false && action.slot !== this.run.plan.targetSlot) return false;
-        return action.slot === this.run.plan.targetSlot && this.run.actionProgress === 0;
+        return CraftingPlan.shouldUseBulkCraft(
+            action,
+            this.run?.actionProgress,
+            this.run?.plan?.targetSlot,
+            this.run?.settings
+        );
     }
 
     /**
@@ -1522,50 +1134,21 @@ class CraftingService extends BaseService {
      * fixed number of ordinary recipe clicks.
      */
     _shouldUseShiftCraft(action) {
-        const shift = this.run?.settings?.shiftCraft || {};
-        if (shift.enabled !== true || !action || this.run.actionProgress !== 0) return false;
-        const tier = this._recipeTier(action.slot, this.run.settings);
-        if (tier === 2) return shift.tier2 !== false;
-        if (tier === 3) return shift.tier3 !== false;
-        if (tier !== 4) return false;
-
-        // B4 recipes share several B3 components. An operator may opt in to
-        // a specific slot only after proving that its inputs are isolated on
-        // this server. Keeping the default empty is deliberately conservative.
-        const allowedSlots = Array.isArray(shift.tier4Slots) ? shift.tier4Slots : [];
-        return allowedSlots.map(Number).includes(Number(action.slot));
+        return CraftingPlan.shouldUseShiftCraft(action, this.run?.actionProgress, this.run?.settings);
     }
 
     _recipeTier(slot, settings = this.settings(), visiting = new Set()) {
-        const numericSlot = Number(slot);
-        if (visiting.has(numericSlot)) return null;
-        const recipe = settings.recipes?.[numericSlot];
-        if (!recipe) return null;
-        const next = new Set(visiting).add(numericSlot);
-        const childTiers = (recipe.inputs || [])
-            .filter(input => Number.isInteger(input.slot))
-            .map(input => this._recipeTier(input.slot, settings, next))
-            .filter(Number.isFinite);
-        return childTiers.length ? Math.max(...childTiers) + 1 : 2;
+        return CraftingPlan.recipeTier(slot, settings, visiting);
     }
 
     _requiresFreeInventorySlot(action, usesShift) {
-        if (usesShift) return false;
-        // B3/B4/B5 consume inputs before inserting their output on MinerUA;
-        // they remain safe at zero free slots. Only an ordinary raw -> B2
-        // click needs a free slot. This is a guard, not a planning shortcut.
-        return this._recipeTier(action.slot, this.run?.settings) === 2;
+        return CraftingPlan.requiresFreeInventorySlot(action, usesShift, this.run?.settings);
     }
 
     _countMaterialInInventory(slot) {
         const definition = this._materialDefinitions(this.run?.settings || this.settings()).get(Number(slot));
-        if (!definition) return 0;
         const items = this.service('inventory')?.getItems?.() || this.state.inventory?.items || [];
-        return items.reduce((total, item) => (
-            this._matchMaterialDefinition(item, new Map([[definition.slot, definition]]))
-                ? total + Math.max(0, Number(item?.count) || 0)
-                : total
-        ), 0);
+        return RecipeIdentity.countMaterial(items, definition);
     }
 
     _shiftCraftStableMs() {
@@ -1659,6 +1242,7 @@ class CraftingService extends BaseService {
             this._setState('STOPPED');
         }
         await this.service('gui').close();
+        this._releaseGuiOwner();
         return wasActive ? Result.SUCCESS : Result.NO_ACTION;
     }
 
@@ -1672,6 +1256,7 @@ class CraftingService extends BaseService {
     _complete() {
         this.run.active = false;
         this.run.status = 'COMPLETED';
+        this._releaseGuiOwner();
         this._setState('COMPLETED');
         const suffix = this.run.partial
             ? `; còn ${this.run.plan.deferredActions?.length || 0} công đoạn sẽ thử lại khi đủ nguyên liệu.`
@@ -1751,16 +1336,22 @@ class CraftingService extends BaseService {
 
         const inventoryChanged = this._inventorySignature() !== pending.inventorySignature;
         const guiChanged = (this.state.gui.lastUpdate || 0) > pending.guiUpdatedAt;
-        const outputAfter = pending.shiftCraft
-            ? this._countMaterialInInventory(pending.action.slot)
-            : null;
-        const outputIncreased = pending.shiftCraft && outputAfter > pending.outputBefore;
+        const outputAfter = pending.bulkCraft
+            ? null
+            : this._countMaterialInInventory(pending.action.slot);
+        const outputIncreased = !pending.bulkCraft && outputAfter > pending.outputBefore;
         const acknowledged = pending.shiftCraft
             ? outputIncreased
-            : inventoryChanged || guiChanged;
+            : (pending.amountSelection ? outputIncreased : inventoryChanged || guiChanged);
 
         if (!acknowledged) {
             if (now >= pending.deadline) {
+                if (pending.amountSelection) {
+                    return this._fail(
+                        Result.FAILED,
+                        `Chọn ONE cho ${pending.action.name} không làm tăng ${pending.action.itemKey || 'output'} trong inventory; không click lại để tránh craft trùng.`
+                    );
+                }
                 const nextRetry = (pending.retryCount || 0) + 1;
                 const maxRetries = this._clickAckMaxRetries();
                 if (!pending.bulkCraft && !pending.shiftCraft && nextRetry <= maxRetries) {
@@ -1924,14 +1515,76 @@ class CraftingService extends BaseService {
     }
 
     _fail(result, message) {
+        this._clearCraftingGuiListener();
         if (this.run) {
             this.run.active = false;
             this.run.status = 'FAILED';
             this.run.error = message;
         }
+        this._releaseGuiOwner();
         this._setState('FAILED', { error: message });
         this.error(message);
         return result;
+    }
+
+    _releaseGuiOwner() {
+        this.service('gui')?.release?.('crafting');
+    }
+
+    _windowTitle(window) {
+        const title = window?.title;
+        if (typeof title === 'string') return title.replace(/[\r\n]+/g, ' ') || '(không có title)';
+        const rendered = title?.toString?.();
+        return rendered && rendered !== '[object Object]' ? rendered : '(không có title)';
+    }
+
+    _craftingRootScreen(gui) {
+        return new CraftingRootScreen(gui, this.config);
+    }
+
+    _craftingRecipeScreen(gui) {
+        return new CraftingRecipeScreen(gui, { events: this.manager('events') });
+    }
+
+    _craftAmountScreen(gui) {
+        return new CraftAmountScreen(gui, {
+            config: this.config,
+            events: this.manager('events')
+        });
+    }
+
+    async _waitForAmountWindowReady(gui, amountWindow) {
+        if (!amountWindow || gui?.window?.() !== amountWindow) return Result.GUI_NOT_FOUND;
+        const delay = this._bounded(this.run?.settings?.clickIntervalMs, 0, 5000, 500);
+        if (delay > 0) {
+            const scheduler = this.manager('scheduler');
+            if (typeof scheduler?.sleep === 'function') {
+                await scheduler.sleep(delay);
+            } else {
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+        return gui?.window?.() === amountWindow ? Result.SUCCESS : Result.GUI_NOT_FOUND;
+    }
+
+    _listenForCraftingGui() {
+        this._clearCraftingGuiListener();
+        const events = this.manager('events');
+        if (!events?.on || !events?.off) return;
+
+        const onOpen = window => {
+            if (this.run) this.run.openingGuiWindow = window;
+            this._clearCraftingGuiListener();
+        };
+        this.run.openingGuiWindow = null;
+        this.run.removeOpeningGuiListener = () => events.off(Events.GUI.OPEN, onOpen);
+        events.on(Events.GUI.OPEN, onOpen);
+    }
+
+    _clearCraftingGuiListener() {
+        const remove = this.run?.removeOpeningGuiListener;
+        if (typeof remove === 'function') remove();
+        if (this.run) this.run.removeOpeningGuiListener = null;
     }
 
     _setState(status, extra = {}) {
@@ -1970,8 +1623,7 @@ class CraftingService extends BaseService {
     }
 
     _bounded(value, min, max, fallback) {
-        const number = Number(value);
-        return Number.isFinite(number) ? Math.min(Math.max(number, min), max) : fallback;
+        return CraftingPlan.boundedNumber(value, min, max, fallback);
     }
 
     _inventorySignature() {

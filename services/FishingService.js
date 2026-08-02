@@ -4,6 +4,7 @@ const BaseService = require('../core/base/BaseService');
 const Result = require('../core/constants/Result');
 const Events = require('../core/constants/Events');
 const { Vec3 } = require('vec3');
+const FishingScreen = require('../screens/FishingScreen');
 
 class FishingService extends BaseService {
     constructor(ctx) {
@@ -22,6 +23,11 @@ class FishingService extends BaseService {
 
     async start() {
         if (this.running) return Result.ALREADY_DONE;
+
+        const gui = this.service('gui');
+        const acquired = gui?.acquire?.('fishing');
+        if (acquired && acquired !== Result.SUCCESS) return acquired;
+
         this.running = true;
         this.starting = true;
         this.paused = false;
@@ -30,21 +36,29 @@ class FishingService extends BaseService {
 
         try {
             const settings = this.config.fishing || {};
-            const gui = this.service('gui');
             const previousWindow = gui.window();
-            const command = settings.command || '/afk';
-            this.info(`Đang gửi ${command}.`);
-            const sent = await this.service('chat').sendCommand(command);
-            if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi ${command}: ${sent}.`);
-            const afkWindow = await this.waitForWindow(gui, previousWindow, settings.guiTimeoutMs ?? 10000);
+            const screen = this._screen(gui);
+            let waitForAfkWindow;
+            const serverCommands = this.service('serverCommands');
+            this.info('Đang gửi lệnh mở AFK fishing.');
+            const sent = serverCommands?.openFishingAfk
+                ? await serverCommands.openFishingAfk({
+                    beforeSend: () => {
+                        waitForAfkWindow = screen.waitForOpen(previousWindow, settings.guiTimeoutMs ?? 10000);
+                    }
+                })
+                : Result.FAILED;
+            if (sent !== Result.SUCCESS) throw new Error(`Không thể gửi lệnh AFK fishing: ${sent}.`);
+            if (!waitForAfkWindow) throw new Error('Không thể đăng ký chờ GUI AFK.');
+            const afkWindow = await waitForAfkWindow.promise;
             await new Promise(resolve => setTimeout(resolve, settings.afkMenuDelayMs ?? 1000));
 
-            const slots = settings.afkSlots || [11, 13, 15];
+            const slots = screen.afkSlots();
             let teleported = false;
             for (const slot of slots) {
                 this.info(`Đang thử slot AFK ${slot}.`);
                 const beforePosition = this.bot.entity?.position?.clone?.() || null;
-                const clicked = await gui.click(slot);
+                const clicked = await screen.clickAfkSlot(slot);
                 if (clicked !== Result.SUCCESS) continue;
                 teleported = await this.waitForTeleport(beforePosition, settings.slotTeleportTimeoutMs ?? 5000);
                 if (teleported) {
@@ -69,6 +83,7 @@ class FishingService extends BaseService {
         }
         finally {
             this.starting = false;
+            if (acquired === Result.SUCCESS) gui?.release?.('fishing');
         }
     }
 
@@ -475,6 +490,10 @@ class FishingService extends BaseService {
             this.bot.setControlState('sprint', false);
         }
         this.directFallbackActive = false;
+    }
+
+    _screen(gui) {
+        return new FishingScreen(gui, { config: this.config, events: this.ctx.getManager('events') });
     }
 
     slotTarget(settings, slot) {

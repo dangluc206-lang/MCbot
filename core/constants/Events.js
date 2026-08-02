@@ -31,6 +31,7 @@ const Connection = Object.freeze({
     RECONNECTING: 'connection.reconnecting',
     RESOURCE_PACK: 'connection.resourcePack',
     READY: 'connection.ready',
+    AUTHENTICATED: 'connection.authenticated',
     KICKED: 'connection.kicked',
     ENDED: 'connection.ended',
     ERROR: 'connection.error'
@@ -100,6 +101,7 @@ const Collector = Object.freeze({
 const Storage = Object.freeze({
     START: 'storage.start',
     STOP: 'storage.stop',
+    SNAPSHOT: 'storage.snapshot',
     SELL_INVENTORY: 'storage.sellInventory',
     SELL_STORAGE: 'storage.sellStorage',
     FINISHED: 'storage.finished',

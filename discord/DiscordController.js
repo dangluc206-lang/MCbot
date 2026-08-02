@@ -135,6 +135,7 @@ class DiscordController {
             this.client.on(DiscordEvents.Error, this.boundClientError);
 
             const ready = this._waitUntilReady();
+            ready.catch(() => {});
             await this.client.login(token);
             await ready;
 

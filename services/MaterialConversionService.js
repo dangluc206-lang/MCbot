@@ -3,6 +3,7 @@
 const BaseService = require('../core/base/BaseService');
 const Result = require('../core/constants/Result');
 const Events = require('../core/constants/Events');
+const MaterialConversionScreen = require('../screens/MaterialConversionScreen');
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -42,7 +43,8 @@ const DEFAULT_SETTINGS = Object.freeze({
         gold_ingot: 'gold_block',
         diamond: 'diamond_block',
         emerald: 'emerald_block'
-    }
+    },
+    unpackItems: {}
 });
 
 /**
@@ -67,7 +69,8 @@ class MaterialConversionService extends BaseService {
             ...configured,
             rawSlots: { ...DEFAULT_SETTINGS.rawSlots, ...(configured.rawSlots || {}) },
             blockSlots: { ...DEFAULT_SETTINGS.blockSlots, ...(configured.blockSlots || {}) },
-            blockItems: { ...DEFAULT_SETTINGS.blockItems, ...(configured.blockItems || {}) }
+            blockItems: { ...DEFAULT_SETTINGS.blockItems, ...(configured.blockItems || {}) },
+            unpackItems: { ...DEFAULT_SETTINGS.unpackItems, ...(configured.unpackItems || {}) }
         };
     }
 
@@ -100,6 +103,18 @@ class MaterialConversionService extends BaseService {
             return Result.NO_ACTION;
         }
 
+        const gui = this.service('gui');
+        const delegatedOwner = typeof options.guiOwner === 'string' && options.guiOwner.trim()
+            ? options.guiOwner.trim()
+            : null;
+        const currentOwner = gui?.owner?.() || null;
+        if (currentOwner && currentOwner !== delegatedOwner) {
+            this.debug(`Material conversion skipped; GUI owner=${currentOwner}.`);
+            return Result.BUSY;
+        }
+        const acquired = currentOwner ? null : gui?.acquire?.('material-conversion');
+        if (acquired && acquired !== Result.SUCCESS) return acquired;
+
         this.running = true;
         this._setState({ status: 'RUNNING', direction, targets, converted: [], current: null, lastError: null });
         try {
@@ -128,12 +143,13 @@ class MaterialConversionService extends BaseService {
             return result;
         } finally {
             this.running = false;
+            if (acquired === Result.SUCCESS) gui?.release?.('material-conversion');
         }
     }
 
     /** Packs raw B1 materials after a normal `/kho` inspection. */
-    async pack() {
-        return this.run({ direction: 'pack' });
+    async pack(options = {}) {
+        return this.run({ direction: 'pack', ...options });
     }
 
     /**
@@ -145,12 +161,12 @@ class MaterialConversionService extends BaseService {
      * @param {Object<String, Number>} rawSlots optional CraftingService map
      * @returns {Promise<String>}
      */
-    async unpackForRequirements(rawRequirements = [], rawSlots = {}) {
+    async unpackForRequirements(rawRequirements = [], rawSlots = {}, options = {}) {
         const settings = this.settings();
         if (settings.enabled === false || settings.unpackBeforeCraft === false) return Result.NO_ACTION;
-        const plan = this.getUnpackPlan(rawRequirements, rawSlots);
+        const plan = this.getUnpackPlan(rawRequirements, rawSlots, options);
         return plan.targets.length > 0
-            ? this.run({ direction: 'unpack', targets: plan.targets })
+            ? this.run({ direction: 'unpack', targets: plan.targets, guiOwner: options.guiOwner })
             : Result.NO_ACTION;
     }
 
@@ -165,7 +181,7 @@ class MaterialConversionService extends BaseService {
      * @param {Object<String, Number>} rawSlots
      * @returns {{targets:String[], additionalStorageUnits:Number, details:Array}}
      */
-    getUnpackPlan(rawRequirements = [], rawSlots = {}) {
+    getUnpackPlan(rawRequirements = [], rawSlots = {}, options = {}) {
         const settings = this.settings();
         const requiredByItem = new Map();
         for (const requirement of Array.isArray(rawRequirements) ? rawRequirements : []) {
@@ -185,12 +201,15 @@ class MaterialConversionService extends BaseService {
                 const direct = Number(bySlot.get(rawSlot)?.amount);
                 const blocks = Number(bySlot.get(blockSlot)?.amount);
                 const required = Number(requiredByItem.get(item));
-                const needsUnpack = Number.isInteger(rawSlot)
+                const canUnpack = Number.isInteger(rawSlot)
                     && Number.isInteger(blockSlot)
-                    && Number.isFinite(direct)
+                    && required > 0;
+                const needsUnpack = canUnpack && (options.force === true || (
+                    Number.isFinite(direct)
                     && Number.isFinite(blocks)
                     && direct < required
-                    && blocks > 0;
+                    && blocks > 0
+                ));
                 return {
                     item,
                     required,
@@ -239,34 +258,33 @@ class MaterialConversionService extends BaseService {
     /** @private */
     async _convertOne(settings, targetItem, direction) {
         const gui = this.service('gui');
-        const chat = this.service('chat');
-        if (!gui || !chat) return Result.FAILED;
+        const serverCommands = this.service('serverCommands');
+        if (!gui || !serverCommands?.openMaterialConversionMenu) return Result.FAILED;
 
         const previousMenu = gui.window();
         const menuUpdatedAt = this.state.gui.lastUpdate || 0;
-        const sent = await chat.sendCommand(settings.command);
+        const sent = await serverCommands.openMaterialConversionMenu();
         if (sent !== Result.SUCCESS) return sent;
 
         const menu = await this._waitForWindowChange(gui, previousMenu, menuUpdatedAt, settings.guiTimeoutMs, 'GUI /ks');
-        const menuSlot = Number(settings.menuSlot);
-        if (!Number.isInteger(menuSlot) || !menu?.slots?.[menuSlot]) return Result.GUI_NOT_FOUND;
+        const screen = this._screen(gui);
+        const openedConversion = await screen.clickMenuAndWait(settings.guiTimeoutMs);
+        if (openedConversion.result !== Result.SUCCESS) return openedConversion.result;
 
         const conversionUpdatedAt = this.state.gui.lastUpdate || 0;
-        const openedConversion = await gui.click(menuSlot, Number(settings.menuButton) || 0, 0);
-        if (openedConversion !== Result.SUCCESS) return openedConversion;
 
         const conversionWindow = await this._waitForWindowChange(
             gui, menu, conversionUpdatedAt, settings.guiTimeoutMs, 'GUI ép phôi'
         );
-        const guiItem = direction === 'pack' ? settings.blockItems?.[targetItem] : targetItem;
-        const targetSlot = this._findItemSlot(conversionWindow, guiItem);
-        if (!Number.isInteger(targetSlot) || targetSlot < 0) {
-            this.warn(`GUI ép phôi không có ${guiItem}; bỏ qua ${targetItem}.`);
+        const targetDefinition = this._targetDefinition(settings, targetItem, direction);
+        const target = screen.findTarget(targetDefinition);
+        if (target.status !== 'FOUND') {
+            this.warn(`GUI ép phôi không có button đổi ${targetItem}; không thể đổi ${targetItem}.`);
             await this._closeOpenWindow(gui);
-            return Result.SUCCESS;
+            return Result.ITEM_NOT_FOUND;
         }
 
-        const clicked = await gui.click(targetSlot, 0, 0);
+        const clicked = await screen.clickTarget(targetDefinition);
         if (clicked !== Result.SUCCESS) return clicked;
         await this._closeOpenWindow(gui);
         await this._sleep(this._clickDelayMs(settings));
@@ -274,12 +292,22 @@ class MaterialConversionService extends BaseService {
     }
 
     /** @private */
-    _findItemSlot(window, itemName) {
-        const end = Number.isInteger(window?.inventoryStart)
-            ? window.inventoryStart
-            : (window?.slots?.length || 0);
-        return (window?.slots || []).slice(0, end)
-            .findIndex(item => item?.name === itemName);
+    _screen(gui) {
+        return new MaterialConversionScreen(gui, { config: this.config, events: this.events });
+    }
+
+    _targetDefinition(settings, targetItem, direction) {
+        if (direction === 'unpack') {
+            const configured = settings.unpackItems?.[targetItem];
+            if (configured && typeof configured === 'object') {
+                return { vanillaName: targetItem, ...configured };
+            }
+            if (typeof configured === 'string' && configured.trim()) {
+                return { vanillaName: targetItem, aliases: [configured] };
+            }
+            return { vanillaName: targetItem };
+        }
+        return { vanillaName: settings.blockItems?.[targetItem] || targetItem };
     }
 
     /** @private */

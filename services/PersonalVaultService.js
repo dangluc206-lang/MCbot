@@ -3,6 +3,7 @@
 const BaseService = require('../core/base/BaseService');
 const Result = require('../core/constants/Result');
 const Events = require('../core/constants/Events');
+const PersonalVaultScreen = require('../screens/PersonalVaultScreen');
 const { compactItemLabel, itemLabels, normalizeItemLabel } = require('../utils/ItemLabels');
 
 const DEFAULT_SETTINGS = Object.freeze({
@@ -33,7 +34,7 @@ class PersonalVaultService extends BaseService {
         this.name = 'PersonalVaultService';
         this.events = ctx.getManager('events');
         this.gui = ctx.getService('gui');
-        this.chat = ctx.getService('chat');
+        this.serverCommands = null;
         this.busy = false;
         this.lastCommandAt = 0;
     }
@@ -44,7 +45,7 @@ class PersonalVaultService extends BaseService {
     }
 
     /** Opens /pv 2, snapshots the container, then closes it. */
-    async refresh() {
+    async refresh(options = {}) {
         return this._withVault(async window => {
             const items = this._snapshot(window);
             this._setState({
@@ -55,7 +56,7 @@ class PersonalVaultService extends BaseService {
             });
             this.success(`Đã đọc /pv 2: ${items.length} stack, ${items.reduce((total, item) => total + item.count, 0)} item.`);
             return Result.SUCCESS;
-        });
+        }, options);
     }
 
     /**
@@ -69,7 +70,7 @@ class PersonalVaultService extends BaseService {
      *
      * @returns {Promise<String>}
      */
-    async withdraw(requests = []) {
+    async withdraw(requests = [], options = {}) {
         const pending = requests
             .map(request => ({ ...request, amount: Number(request.amount) }))
             .filter(request => Number.isFinite(request.amount) && request.amount > 0);
@@ -139,7 +140,7 @@ class PersonalVaultService extends BaseService {
 
             this.success(`Đã rút ${moved.length} stack từ /pv 2 vào inventory.`);
             return Result.SUCCESS;
-        });
+        }, options);
     }
 
     /**
@@ -154,7 +155,7 @@ class PersonalVaultService extends BaseService {
      * moved; stale intermediate-overflow requests are reported as PARTIAL but
      * do not turn a successfully stored SHK into a failure.
      */
-    async deposit(requests = []) {
+    async deposit(requests = [], options = {}) {
         const pending = requests
             .map(request => ({ ...request, amount: Number(request.amount) }))
             .filter(request => typeof request.name === 'string'
@@ -219,7 +220,7 @@ class PersonalVaultService extends BaseService {
 
             this.success(`Đã cất ${moved.length} stack vào /pv 2.`);
             return Result.SUCCESS;
-        });
+        }, options);
     }
 
     getItems() {
@@ -239,12 +240,20 @@ class PersonalVaultService extends BaseService {
         return Math.max(0, cooldownMs - (Date.now() - this.lastCommandAt));
     }
 
-    async _withVault(operation) {
+    async _withVault(operation, options = {}) {
         if (!this.state.bot.connected) return Result.NOT_CONNECTED;
         if (this.busy) return Result.BUSY;
         this.gui = this.service('gui');
-        this.chat = this.service('chat');
-        if (!this.gui || !this.chat) return Result.FAILED;
+        this.serverCommands = this.service('serverCommands');
+        if (!this.gui || !this.serverCommands) return Result.FAILED;
+
+        const delegatedOwner = typeof options.guiOwner === 'string' && options.guiOwner.trim()
+            ? options.guiOwner.trim()
+            : null;
+        const currentOwner = this.gui.owner?.() || null;
+        if (currentOwner && currentOwner !== delegatedOwner) return Result.BUSY;
+        const acquired = currentOwner ? null : this.gui.acquire?.('personal-vault');
+        if (acquired && acquired !== Result.SUCCESS) return acquired;
 
         const settings = this.settings();
         this.busy = true;
@@ -267,6 +276,7 @@ class PersonalVaultService extends BaseService {
                 }
             }
             this.busy = false;
+            if (acquired === Result.SUCCESS) this.gui.release?.('personal-vault');
         }
     }
 
@@ -287,7 +297,7 @@ class PersonalVaultService extends BaseService {
             await this._closeOpenWindow();
             await this._waitForCommandCooldown(settings);
             let waiting;
-            const sent = await this.chat.sendCommand(settings.command, {
+            const sent = await this.serverCommands.openPersonalVault({
                 // Start the GUI timeout only when ChatService is actually
                 // about to emit /pv, after any global post-GUI cooldown.
                 beforeSend: () => { waiting = this._waitForFreshWindow(settings.guiTimeoutMs); }
@@ -451,7 +461,7 @@ class PersonalVaultService extends BaseService {
             }
         }
 
-        return this._withdrawExactFromSourceSlot(window, source, amount);
+        return this._withdrawExactFromSourceSlot(window, source, amount, settings);
     }
 
     /** @private */
@@ -477,7 +487,7 @@ class PersonalVaultService extends BaseService {
      *
      * @private
      */
-    async _withdrawExactFromSourceSlot(window, source, amount) {
+    async _withdrawExactFromSourceSlot(window, source, amount, settings = this.settings()) {
         const inventoryStart = Number.isInteger(window?.inventoryStart)
             ? window.inventoryStart
             : (window?.slots?.length || 0);
@@ -498,17 +508,18 @@ class PersonalVaultService extends BaseService {
 
         const sourceCount = Math.max(0, Number(source.count) || 0);
         if (amount > sourceCount) return Result.INSUFFICIENT_ITEMS;
+        const screen = new PersonalVaultScreen(this.gui, { title: settings.title });
         let holdingSource = false;
         try {
-            let result = await this.gui.click(source.slot, 0, 0);
+            let result = await screen.clickVaultSlotIfUnchanged(source.slot, screen.snapshotSlot(source.slot), 0, 0);
             if (result !== Result.SUCCESS) return result;
             holdingSource = true;
             for (let moved = 0; moved < amount; moved += 1) {
-                result = await this.gui.click(destinationSlot, 1, 0);
+                result = await screen.clickPlayerSlotIfUnchanged(destinationSlot, screen.snapshotSlot(destinationSlot), 1, 0);
                 if (result !== Result.SUCCESS) return result;
             }
             if (amount < sourceCount) {
-                result = await this.gui.click(source.slot, 0, 0);
+                result = await screen.clickVaultSlotIfUnchanged(source.slot, screen.snapshotSlot(source.slot), 0, 0);
                 if (result !== Result.SUCCESS) return result;
             }
             holdingSource = false;
@@ -521,7 +532,7 @@ class PersonalVaultService extends BaseService {
             // cursor. Best-effort restoration is safer than a later command.
             if (holdingSource) {
                 try {
-                    await this.gui.click(source.slot, 0, 0);
+                    await screen.clickVaultSlotIfUnchanged(source.slot, screen.snapshotSlot(source.slot), 0, 0);
                 } catch (error) {
                     this.error(`Không thể trả item đang cầm về slot /pv 2 ${source.slot}: ${error.message}`);
                 }

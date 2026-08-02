@@ -12,6 +12,7 @@ const {
     InventoryService,
     MiningService,
     MaterialConversionService,
+    MinecraftLoginService,
     MovementService,
     PersonalVaultService,
     PlayerService,
@@ -87,6 +88,11 @@ module.exports = function registerServices(ctx) {
     ctx.registerService(
         'materialConversion',
         new MaterialConversionService(ctx)
+    );
+
+    ctx.registerService(
+        'minecraftLogin',
+        new MinecraftLoginService(ctx)
     );
 
     ctx.registerService(

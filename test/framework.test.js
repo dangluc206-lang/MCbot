@@ -92,9 +92,9 @@ async function waitFor(predicate, timeout = 250) {
     }
 }
 
-function createServerCommandService(config, chatService) {
+function createServerCommandService(config, chatService, bot = null) {
     return new ServerCommandService({
-        bot: null,
+        bot,
         runtime: { state: {} },
         config,
         logger: null,
@@ -183,6 +183,97 @@ test('ServerCommandService resolves the SkyBlock selector command without using 
     }, chatService);
     assert.equal(await invalidService.openSkyBlockSelector(), Result.FAILED);
     assert.equal(calls.length, 4);
+});
+
+test('ServerCommandService resolves new, legacy, and default commands through ChatService', async () => {
+    const calls = [];
+    const chatService = {
+        sendCommand: async (...args) => {
+            calls.push(args);
+            return Result.PENDING;
+        }
+    };
+    const options = { beforeSend: () => {} };
+    const methods = [
+        'openCraftingMenu', 'openSmeltingMenu', 'openMaterialConversionMenu', 'openPersonalVault', 'openDungeonStorage', 'openStorage', 'goIsland',
+        'openSkyBlockSelector', 'openDungeon', 'openAutofarm', 'openFishingAfk'
+    ];
+    const bot = { chat: () => { throw new Error('ServerCommandService must not call bot.chat'); } };
+    const newConfigService = createServerCommandService({
+        serverCommands: {
+            craftingMenu: 'primary-crafting', crafting: 'legacy-server-crafting', smelting: 'new-smelting', materialConversion: 'new-conversion',
+            personalVault: 'new-vault', storage: 'new-storage',
+            island: 'new-island', skyblockSelector: 'new-selector', dungeon: 'new-dungeon',
+            autofarm: 'new-autofarm', fishingAfk: 'new-fishing', storageSell: 'new-sell'
+        },
+        crafting: { command: '/ks', personalVault: { command: '/pv 2' } },
+        storage: {
+            guiCommand: '/kho', sellCommand: '/kho sell',
+            conversion: { command: '/ks', targetItems: ['diamond'] }
+        },
+        skyblock: { islandCommand: '/is', selectorCommand: '/skyblock' },
+        dungeon: { command: '/d', autofarmCommand: '/autofarm' },
+        fishing: { command: '/afk' }
+    }, chatService, bot);
+
+    for (const method of methods) assert.equal(await newConfigService[method](options), Result.PENDING);
+    assert.equal(await newConfigService.sellStorage('diamond', options), Result.PENDING);
+    assert.deepEqual(calls.map(([command, receivedOptions]) => [command, receivedOptions]), [
+        ['/primary-crafting', options], ['/new-smelting', options], ['/new-conversion', options],
+        ['/new-vault', options], ['/new-vault', options], ['/new-storage', options],
+        ['/new-island', options], ['/new-selector', options], ['/new-dungeon', options],
+        ['/new-autofarm', options], ['/new-fishing', options], ['/new-sell diamond', options]
+    ]);
+
+    calls.length = 0;
+    const legacyService = createServerCommandService({
+        crafting: { command: 'legacy-crafting', personalVault: { command: 'legacy-vault' } },
+        storage: {
+            guiCommand: 'legacy-storage', sellCommand: 'legacy-sell', targetItems: ['diamond'],
+            smelting: { command: 'legacy-smelting' },
+            conversion: { command: 'legacy-conversion', targetItems: ['diamond'] }
+        },
+        skyblock: { islandCommand: 'legacy-island', selectorCommand: 'legacy-selector' },
+        dungeon: { command: 'legacy-dungeon', autofarmCommand: 'legacy-autofarm', storageCommand: 'legacy-dungeon-vault' },
+        fishing: { command: 'legacy-fishing' }
+    }, chatService);
+    for (const method of methods) assert.equal(await legacyService[method](), Result.PENDING);
+    assert.equal(await legacyService.sellStorage('diamond'), Result.PENDING);
+    assert.deepEqual(calls.map(([command]) => command), [
+        '/legacy-crafting', '/legacy-smelting', '/legacy-conversion', '/legacy-vault', '/legacy-dungeon-vault', '/legacy-storage', '/legacy-island',
+        '/legacy-selector', '/legacy-dungeon', '/legacy-autofarm', '/legacy-fishing', '/legacy-sell diamond'
+    ]);
+
+    calls.length = 0;
+    const defaultService = createServerCommandService({
+        storage: { conversion: { targetItems: ['diamond'] } }
+    }, chatService);
+    for (const method of methods) assert.equal(await defaultService[method](), Result.PENDING);
+    assert.equal(await defaultService.sellStorage('diamond'), Result.PENDING);
+    assert.deepEqual(calls.map(([command]) => command), [
+        '/ks', '/ks', '/ks', '/pv 2', '/pv 2', '/kho', '/is', '/skyblock', '/d', '/autofarm', '/afk', '/kho sell diamond'
+    ]);
+});
+
+test('ServerCommandService rejects invalid configured commands without delegating', async () => {
+    const calls = [];
+    const service = createServerCommandService({
+        serverCommands: {
+            crafting: 'bad\rcommand', smelting: 'bad\ncommand', materialConversion: 'bad\ncommand',
+            dungeon: 'bad\ncommand', autofarm: 'bad\rcommand', storageSell: 'bad\ncommand'
+        },
+        storage: { conversion: { targetItems: ['diamond'] } }
+    }, {
+        sendCommand: async (...args) => calls.push(args)
+    });
+
+    assert.equal(await service.openCraftingMenu(), Result.FAILED);
+    assert.equal(await service.openSmeltingMenu(), Result.FAILED);
+    assert.equal(await service.openMaterialConversionMenu(), Result.FAILED);
+    assert.equal(await service.openDungeon(), Result.FAILED);
+    assert.equal(await service.openAutofarm(), Result.FAILED);
+    assert.equal(await service.sellStorage('diamond'), Result.FAILED);
+    assert.deepEqual(calls, []);
 });
 
 test('framework can restart after a clean shutdown', async () => {
@@ -384,6 +475,41 @@ test('GUI probe executes generic command and left/right slot scripts through ser
     await framework.stop();
 });
 
+test('GUI probe skips while crafting owns the GUI and always releases its own lock', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, { guiProbe: { windowTimeoutMs: 250 } });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    const gui = framework.ctx.getService('gui');
+    const probe = framework.ctx.getService('guiProbe');
+
+    assert.equal(gui.acquire('crafting'), Result.SUCCESS);
+    const blocked = await probe.run('/ks > close');
+    assert.equal(blocked.result, Result.BUSY);
+    assert.deepEqual(bot.chatMessages, []);
+    assert.equal(gui.owner(), 'crafting');
+
+    assert.equal(gui.release('crafting'), Result.SUCCESS);
+    bot.chat = message => {
+        bot.chatMessages.push(message);
+        queueMicrotask(() => bot.emit('windowOpen', { id: 7, title: 'Probe', slots: Array(27) }));
+    };
+    const completed = await probe.run('/ks > close');
+    assert.equal(completed.result, Result.SUCCESS);
+    assert.equal(gui.owner(), null);
+
+    bot.chat = message => bot.chatMessages.push(message);
+    const timedOut = await probe.run('/ks');
+    assert.equal(timedOut.result, Result.GUI_TIMEOUT);
+    assert.equal(gui.owner(), null);
+
+    framework.ctx.getService('chat').sendCommand = async () => { throw new Error('probe command failure'); };
+    const failed = await probe.run('/ks');
+    assert.equal(failed.result, Result.FAILED);
+    assert.equal(gui.owner(), null);
+    await framework.stop();
+});
+
 test('Super Alloy crafting plan expands the configured recipe tree in dependency order', async () => {
     const framework = new Framework(new FakeBot(), {});
     await framework.start();
@@ -450,7 +576,7 @@ test('shift craft B2 works with a full inventory then closes and re-plans from a
     bot.inventory.items = () => crafted
         ? [{ name: 'amethyst_shard', displayName: 'Super Cobblestone', count: 16, slot: 36 }]
         : [];
-    const craftingWindow = { title: 'Recipes', slots: Array(27), inventoryStart: 27 };
+    const craftingWindow = { title: 'Danh sách công thức', slots: Array(27), inventoryStart: 27 };
     craftingWindow.slots[10] = { name: 'amethyst_shard', count: 1, displayName: 'Super Cobblestone' };
     bot.currentWindow = craftingWindow;
     bot.emit('windowOpen', craftingWindow);
@@ -538,7 +664,7 @@ test('Super Alloy crafting checks /kho, enters /ks slot 16, then crafts without 
     const framework = new Framework(bot, {
         crafting: {
             guiTimeoutMs: 100,
-            clickIntervalMs: 100,
+            clickIntervalMs: 0,
             entrySlot: 16,
             personalVault: { enabled: false }
         }
@@ -546,12 +672,16 @@ test('Super Alloy crafting checks /kho, enters /ks slot 16, then crafts without 
     await framework.start();
     framework.runtime.state.bot.connected = true;
     let crafted = false;
-    bot.inventory.items = () => crafted ? [{ name: 'cobblestone', type: 1, count: 1, slot: 36 }] : [];
+    bot.inventory.items = () => crafted
+        ? [{ name: 'cobblestone', type: 1, displayName: 'Siêu đá cuội', count: 1, slot: 36 }]
+        : [];
 
     const craftingWindow = { title: 'Danh sách công thức', slots: Array(27), inventoryStart: 27 };
     craftingWindow.slots[10] = { name: 'cobblestone', count: 1, displayName: 'Siêu đá cuội' };
     const menuWindow = { title: 'Chế tạo', slots: Array(27), inventoryStart: 27 };
     menuWindow.slots[16] = { name: 'crafting_table', count: 1, displayName: 'Công thức' };
+    const amountWindow = { title: 'Chọn số lượng', slots: Array(27), inventoryStart: 27 };
+    amountWindow.slots[20] = { name: 'paper', count: 1, displayName: 'Một' };
 
     const storage = framework.ctx.getService('storage');
     storage.refreshStorageGui = async () => Result.SUCCESS;
@@ -576,8 +706,13 @@ test('Super Alloy crafting checks /kho, enters /ks slot 16, then crafts without 
             bot.emit('windowOpen', craftingWindow);
         }
         if (slot === 10) {
+            bot.currentWindow = amountWindow;
+            bot.emit('windowOpen', amountWindow);
+        }
+        if (slot === 20) {
             crafted = true;
-            bot.emit('windowUpdate', slot, null, { name: 'cobblestone', count: 1 });
+            bot.currentWindow = null;
+            bot.emit('windowClose', amountWindow);
         }
     };
     assert.equal(framework.ctx.getService('crafting').start(10, 1), Result.SUCCESS);
@@ -587,7 +722,8 @@ test('Super Alloy crafting checks /kho, enters /ks slot 16, then crafts without 
     assert.deepEqual(bot.chatMessages, ['/ks']);
     assert.deepEqual(bot.clickedActions, [
         { slot: 16, mouseButton: 0, mode: 0 },
-        { slot: 10, mouseButton: 0, mode: 0 }
+        { slot: 10, mouseButton: 0, mode: 0 },
+        { slot: 20, mouseButton: 0, mode: 0 }
     ]);
     assert.equal(framework.runtime.state.crafting.status, 'COMPLETED');
     await framework.stop();
@@ -635,7 +771,10 @@ test('Super Alloy preflight preserves raw B1 then rebuilds its ledger from a sec
     const crafting = framework.ctx.getService('crafting');
     assert.equal(crafting.start(99, 1), Result.SUCCESS);
     assert.equal(await crafting.tick(), Result.PENDING);
-    assert.deepEqual(calls, [{ runCompression: false }, { runPostProcessing: false }]);
+    assert.deepEqual(calls, [
+        { runCompression: false, guiOwner: 'crafting' },
+        { runPostProcessing: false, guiOwner: 'crafting' }
+    ]);
     assert.equal(crafting.run.status, 'OPENING_GUI');
     assert.equal(crafting.run.plan.rawRequirements[0].amount, 16);
     await framework.stop();
@@ -672,8 +811,8 @@ test('Super Alloy preflight leaves B1 blocks compressed until the matching B2 gr
     assert.equal(await crafting.tick(), Result.PENDING);
     assert.equal(requestedRaw, null);
     assert.deepEqual(refreshCalls, [
-        { runCompression: false },
-        { runPostProcessing: false }
+        { runCompression: false, guiOwner: 'crafting' },
+        { runPostProcessing: false, guiOwner: 'crafting' }
     ]);
     assert.equal(crafting.run.status, 'OPENING_GUI');
     assert.equal(crafting.run.plan.rawRequirements[0].amount, 16);
@@ -716,29 +855,205 @@ test('Crafting starts its /ks GUI timeout after queued command transmission, not
     await framework.stop();
 });
 
-test('Crafting retries an unacknowledged ordinary recipe click before failing safely', async () => {
+test('Crafting opens /ks through ServerCommandService after registering its GUI listener', async () => {
+    const framework = new Framework(new FakeBot(), { crafting: { personalVault: { enabled: false } } });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const crafting = framework.ctx.getService('crafting');
+    const gui = framework.ctx.getService('gui');
+    const events = framework.ctx.getManager('events');
+    const chat = framework.ctx.getService('chat');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    const menuWindow = { title: 'Craft menu', slots: Array(27), inventoryStart: 27 };
+    menuWindow.slots[16] = { name: 'crafting_table', count: 1 };
+    crafting.run = {
+        active: true,
+        status: 'OPENING_GUI',
+        settings: crafting.settings(),
+        previousWindow: null,
+        openingGuiWindow: null,
+        removeOpeningGuiListener: null,
+        guiDeadline: 0,
+        plan: { actions: [] }
+    };
+    chat.sendCommand = async () => assert.fail('CraftingService must not call ChatService directly');
+    let receivedOptions;
+    serverCommands.openCraftingMenu = async options => {
+        receivedOptions = options;
+        assert.equal(events.listenerCount(Events.GUI.OPEN), 0);
+        options.beforeSend();
+        assert.equal(events.listenerCount(Events.GUI.OPEN), 1);
+        gui.sync(menuWindow);
+        events.emit(Events.GUI.OPEN, menuWindow);
+        return Result.SUCCESS;
+    };
+
+    assert.equal(await crafting.tick(), Result.PENDING);
+    assert.equal(typeof receivedOptions.beforeSend, 'function');
+    assert.equal(events.listenerCount(Events.GUI.OPEN), 0);
+    assert.equal(crafting.run.status, 'WAITING_GUI');
+    await framework.stop();
+});
+
+test('Crafting ignores a root GUI that closes before its slot 16 click', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, { crafting: { personalVault: { enabled: false } } });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    const crafting = framework.ctx.getService('crafting');
+    const gui = framework.ctx.getService('gui');
+    const events = framework.ctx.getManager('events');
+    const rootWindow = { title: 'Chế tạo', slots: Array(27), inventoryStart: 27 };
+    rootWindow.slots[16] = { name: 'crafting_table', count: 1 };
+
+    gui.sync(rootWindow);
+    gui.clear(); // Simulate Mineflayer windowClose between GUI.OPEN and this tick.
+    crafting.run = {
+        active: true,
+        status: 'WAITING_GUI',
+        settings: crafting.settings(),
+        previousWindow: null,
+        openingGuiWindow: rootWindow,
+        removeOpeningGuiListener: null,
+        guiDeadline: Date.now() + 1000,
+        plan: { actions: [] }
+    };
+
+    assert.equal(await crafting.tick(), Result.PENDING);
+    assert.equal(crafting.run.status, 'WAITING_GUI');
+    assert.equal(bot.clickedSlots.length, 0);
+    assert.equal(events.listenerCount(Events.GUI.OPEN), 1);
+    await framework.stop();
+});
+
+test('GUIService refuses a click when its expected window has disappeared', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {});
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    const gui = framework.ctx.getService('gui');
+    const window = { title: 'Chế tạo', slots: Array(27) };
+    window.slots[16] = { name: 'crafting_table', count: 1 };
+
+    gui.sync(window);
+    gui.clear();
+    assert.equal(await gui.click(16, 0, 0, window), Result.GUI_NOT_FOUND);
+    assert.deepEqual(bot.clickedSlots, []);
+    await framework.stop();
+});
+
+test('Crafting ignores a root-window update until the expected recipe slot is present', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {});
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    const crafting = framework.ctx.getService('crafting');
+    const gui = framework.ctx.getService('gui');
+    const root = { title: 'Root', slots: Array(27), inventoryStart: 27 };
+    root.slots[16] = { name: 'crafting_table', count: 1 };
+    const recipes = { title: 'Recipes', slots: Array(27), inventoryStart: 27 };
+    recipes.slots[11] = { name: 'coal', count: 1 };
+
+    gui.sync(root);
+    framework.runtime.state.gui.lastUpdate = Date.now();
+    crafting.run = {
+        active: true,
+        status: 'WAITING_CRAFTING_GUI',
+        settings: crafting.settings(),
+        plan: { totalActions: 1, actions: [{ slot: 11, name: 'Refined Coal', count: 1 }] },
+        actionIndex: 0,
+        previousWindow: root,
+        entryGuiUpdatedAt: 0,
+        nextAt: 0
+    };
+
+    assert.equal(await crafting.tick(), Result.PENDING);
+    assert.equal(crafting.run.status, 'WAITING_CRAFTING_GUI');
+
+    gui.sync(recipes);
+    assert.equal(await crafting.tick(), Result.PENDING);
+    assert.equal(crafting.run.status, 'CRAFTING');
+    await framework.stop();
+});
+
+test('Crafting preserves ServerCommandService failures and GUI timeouts', async () => {
+    const framework = new Framework(new FakeBot(), { crafting: { personalVault: { enabled: false } } });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const crafting = framework.ctx.getService('crafting');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    const openRun = () => ({
+        active: true,
+        status: 'OPENING_GUI',
+        settings: crafting.settings(),
+        previousWindow: null,
+        openingGuiWindow: null,
+        removeOpeningGuiListener: null,
+        guiDeadline: 0,
+        plan: { actions: [] }
+    });
+    crafting.run = openRun();
+    serverCommands.openCraftingMenu = async () => Result.NOT_CONNECTED;
+    assert.equal(await crafting.tick(), Result.NOT_CONNECTED);
+    assert.equal(crafting.run.status, 'FAILED');
+
+    crafting.run = openRun();
+    serverCommands.openCraftingMenu = async options => {
+        options.beforeSend();
+        return Result.SUCCESS;
+    };
+    assert.equal(await crafting.tick(), Result.PENDING);
+    crafting.run.guiDeadline = Date.now() - 1;
+    assert.equal(await crafting.tick(), Result.GUI_TIMEOUT);
+    assert.equal(crafting.run.status, 'FAILED');
+    await framework.stop();
+});
+
+test('Crafting does not repeat ONE when the expected output never reaches inventory', async () => {
     const bot = new FakeBot();
     const framework = new Framework(bot, {
         crafting: {
             clickAckTimeoutMs: 500,
             clickAckMaxRetries: 1,
             clickAckRetryDelayMs: 0,
+            clickIntervalMs: 0,
             personalVault: { enabled: false }
         }
     });
     await framework.start();
     framework.runtime.state.bot.connected = true;
 
-    const craftingWindow = { title: 'Recipes', slots: Array(27), inventoryStart: 27 };
+    const craftingWindow = { title: 'Danh sách công thức', slots: Array(27), inventoryStart: 27 };
     craftingWindow.slots[10] = { name: 'cobblestone', count: 1, displayName: 'Super Cobblestone' };
+    const amountWindow = { title: 'Chọn số lượng', slots: Array(27), inventoryStart: 27 };
+    amountWindow.slots[20] = { name: 'paper', count: 1 };
     bot.currentWindow = craftingWindow;
     bot.emit('windowOpen', craftingWindow);
+    bot.clickWindow = async (slot, mouseButton, mode) => {
+        bot.clickedSlots.push(slot);
+        bot.clickedActions.push({ slot, mouseButton, mode });
+        if (slot === 10) {
+            bot.currentWindow = amountWindow;
+            bot.emit('windowOpen', amountWindow);
+        }
+        if (slot === 20) {
+            bot.currentWindow = null;
+            bot.emit('windowClose', amountWindow);
+            bot.currentWindow = craftingWindow;
+            bot.emit('windowOpen', craftingWindow);
+        }
+    };
 
     const crafting = framework.ctx.getService('crafting');
     crafting.run = {
         active: true,
         status: 'CRAFTING',
-        settings: { ...crafting.settings(), clickAckTimeoutMs: 500, clickAckMaxRetries: 1, clickAckRetryDelayMs: 0 },
+        settings: {
+            ...crafting.settings(), clickAckTimeoutMs: 500, clickAckMaxRetries: 1,
+            clickAckRetryDelayMs: 0, clickIntervalMs: 0
+        },
         plan: {
             targetSlot: 10,
             targetName: 'Super Cobblestone',
@@ -770,26 +1085,22 @@ test('Crafting retries an unacknowledged ordinary recipe click before failing sa
     };
 
     assert.equal(await crafting.tick(), Result.PENDING);
-    assert.equal(bot.clickedActions.length, 1);
-    await new Promise(resolve => setTimeout(resolve, 510));
-
-    assert.equal(await crafting.tick(), Result.PENDING);
-    assert.equal(crafting.run.actionRetryCount, 1);
-    assert.equal(await crafting.tick(), Result.PENDING);
     assert.equal(bot.clickedActions.length, 2);
     await new Promise(resolve => setTimeout(resolve, 510));
 
     assert.equal(await crafting.tick(), Result.FAILED);
     assert.equal(crafting.run.status, 'FAILED');
-    assert.match(crafting.run.error, /sau 2 lần click/);
+    assert.match(crafting.run.error, /inventory/);
+    assert.equal(bot.clickedActions.length, 2);
     await framework.stop();
 });
 
-test('Crafting acknowledges an ordinary custom recipe from an inventory refresh without a GUI event', async () => {
+test('Crafting acknowledges ONE only after its custom recipe output reaches inventory', async () => {
     const bot = new FakeBot();
     const framework = new Framework(bot, {
         crafting: {
             clickAckTimeoutMs: 500,
+            clickIntervalMs: 0,
             personalVault: { enabled: false },
             recipes: {
                 98: { itemKey: 'custom_recipe_output', name: 'Custom Recipe Output', inputs: [{ slot: 99, amount: 1 }] },
@@ -805,21 +1116,29 @@ test('Crafting acknowledges an ordinary custom recipe from an inventory refresh 
         ? [{ name: 'amethyst_shard', displayName: 'Custom Recipe Output', count: 1, slot: 36 }]
         : []);
 
-    const craftingWindow = { title: 'Recipes', slots: Array(27), inventoryStart: 27 };
+    const craftingWindow = { title: 'Danh sách công thức', slots: Array(99), inventoryStart: 99 };
     craftingWindow.slots[98] = { name: 'amethyst_shard', count: 1, displayName: 'Custom Recipe Output' };
+    const amountWindow = { title: 'Chọn số lượng', slots: Array(27), inventoryStart: 27 };
+    amountWindow.slots[20] = { name: 'lime_dye', count: 1 };
     bot.currentWindow = craftingWindow;
     bot.emit('windowOpen', craftingWindow);
     bot.clickWindow = async (slot, mouseButton, mode) => {
         bot.clickedSlots.push(slot);
         bot.clickedActions.push({ slot, mouseButton, mode });
-        if (slot === 98) crafted = true;
+        if (slot === 98) {
+            bot.currentWindow = amountWindow;
+            bot.emit('windowOpen', amountWindow);
+        }
+        if (slot === 20) {
+            crafted = true;
+        }
     };
 
     const crafting = framework.ctx.getService('crafting');
     crafting.run = {
         active: true,
         status: 'CRAFTING',
-        settings: crafting.settings(),
+        settings: { ...crafting.settings(), clickIntervalMs: 0 },
         plan: {
             targetSlot: 98,
             targetName: 'Custom Recipe Output',
@@ -851,11 +1170,11 @@ test('Crafting acknowledges an ordinary custom recipe from an inventory refresh 
     };
 
     assert.equal(await crafting.tick(), Result.PENDING);
-    assert.equal(bot.clickedActions.length, 1);
+    assert.equal(bot.clickedActions.length, 2);
     assert.equal(await crafting.tick(), Result.SUCCESS);
     assert.equal(crafting.run.status, 'COMPLETED');
     assert.equal(crafting.run.actionRetryCount, 0);
-    assert.equal(bot.clickedActions.length, 1);
+    assert.equal(bot.clickedActions.length, 2);
     await framework.stop();
 });
 
@@ -1007,12 +1326,16 @@ test('/kho post-processing clicks the block icon to pack stored ingots', async (
     conversionMenu.slots[10] = { name: 'anvil', count: 1, displayName: 'Ép phôi' };
     const conversionWindow = { title: 'Ép phôi thành khối', slots: Array(27), inventoryStart: 27 };
     conversionWindow.slots[4] = { name: 'coal_block', count: 7, displayName: 'Coal Block' };
-    const send = bot.chat.bind(bot);
-    bot.chat = command => {
-        send(command);
-        if (command !== '/ks') return;
+    const chat = framework.ctx.getService('chat');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    chat.sendCommand = async () => assert.fail('MaterialConversionService must not call ChatService directly');
+    let menuCommands = 0;
+    serverCommands.openMaterialConversionMenu = async options => {
+        menuCommands += 1;
+        assert.equal(options, undefined);
         bot.currentWindow = conversionMenu;
         bot.emit('windowOpen', conversionMenu);
+        return Result.SUCCESS;
     };
     bot.clickWindow = async (slot, mouseButton, mode) => {
         bot.clickedSlots.push(slot);
@@ -1030,12 +1353,205 @@ test('/kho post-processing clicks the block icon to pack stored ingots', async (
     const conversion = framework.ctx.getService('materialConversion');
     assert.equal(await conversion.run(), Result.SUCCESS);
 
-    assert.deepEqual(bot.chatMessages, ['/ks']);
+    assert.equal(menuCommands, 1);
+    assert.deepEqual(bot.chatMessages, []);
     assert.deepEqual(bot.clickedActions, [
         { slot: 10, mouseButton: 0, mode: 0 },
         { slot: 4, mouseButton: 0, mode: 0 }
     ]);
     assert.deepEqual(framework.runtime.state.materialConversion.converted, ['coal']);
+    await framework.stop();
+});
+
+test('MaterialConversionService propagates ServerCommandService errors', async () => {
+    const framework = new Framework(new FakeBot(), {
+        storage: { conversion: { enabled: true, targetItems: ['coal'] } }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    framework.runtime.state.storage.gui.items = [{ slot: 10, itemName: 'coal', amount: 9 }];
+
+    const chat = framework.ctx.getService('chat');
+    chat.sendCommand = async () => assert.fail('MaterialConversionService must not call ChatService directly');
+    framework.ctx.getService('serverCommands').openMaterialConversionMenu = async () => Result.NOT_CONNECTED;
+
+    assert.equal(await framework.ctx.getService('materialConversion').run(), Result.NOT_CONNECTED);
+    assert.equal(framework.runtime.state.materialConversion.status, 'FAILED');
+    await framework.stop();
+});
+
+test('MaterialConversionService fails when the conversion GUI lacks the requested item', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {
+        storage: { conversion: { enabled: true, guiTimeoutMs: 100, targetItems: ['coal'] } }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const menu = { title: 'Menu', slots: Array(27), inventoryStart: 27 };
+    menu.slots[10] = { name: 'anvil', count: 1 };
+    const conversionWindow = { title: 'Convert', slots: Array(27), inventoryStart: 27 };
+    conversionWindow.slots[4] = { name: 'redstone', count: 1 };
+    framework.ctx.getService('serverCommands').openMaterialConversionMenu = async () => {
+        bot.currentWindow = menu;
+        bot.emit('windowOpen', menu);
+        return Result.SUCCESS;
+    };
+    bot.clickWindow = async slot => {
+        bot.clickedSlots.push(slot);
+        if (slot === 10) {
+            bot.currentWindow = conversionWindow;
+            bot.emit('windowOpen', conversionWindow);
+        }
+    };
+
+    const result = await framework.ctx.getService('materialConversion').run({
+        direction: 'unpack',
+        targets: ['coal']
+    });
+    assert.equal(result, Result.ITEM_NOT_FOUND);
+    assert.deepEqual(bot.clickedSlots, [10]);
+    assert.equal(framework.runtime.state.materialConversion.status, 'FAILED');
+    assert.equal(framework.runtime.state.materialConversion.lastError, Result.ITEM_NOT_FOUND);
+    await framework.stop();
+});
+
+test('MaterialConversionService uses the configured custom button alias for block-to-raw conversion', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {
+        storage: {
+            conversion: {
+                enabled: true,
+                guiTimeoutMs: 100,
+                clickDelayMs: 0,
+                targetItems: ['coal'],
+                unpackItems: { coal: { aliases: ['Đổi thành than'] } }
+            }
+        }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const menu = { title: 'Menu', slots: Array(27), inventoryStart: 27 };
+    menu.slots[10] = { name: 'anvil', count: 1 };
+    const conversionWindow = { title: 'Convert', slots: Array(27), inventoryStart: 27 };
+    conversionWindow.slots[4] = { name: 'paper', count: 1, displayName: 'Đổi thành than' };
+    framework.ctx.getService('serverCommands').openMaterialConversionMenu = async () => {
+        bot.currentWindow = menu;
+        bot.emit('windowOpen', menu);
+        return Result.SUCCESS;
+    };
+    bot.clickWindow = async slot => {
+        bot.clickedSlots.push(slot);
+        if (slot === 10) {
+            bot.currentWindow = conversionWindow;
+            bot.emit('windowOpen', conversionWindow);
+        }
+        if (slot === 4) {
+            bot.currentWindow = null;
+            bot.emit('windowClose');
+        }
+    };
+
+    assert.equal(await framework.ctx.getService('materialConversion').run({
+        direction: 'unpack', targets: ['coal']
+    }), Result.SUCCESS);
+    assert.deepEqual(bot.clickedSlots, [10, 4]);
+    await framework.stop();
+});
+
+test('MaterialConversionService finds a vanilla raw icon even when an unpack alias is configured', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {
+        storage: {
+            conversion: {
+                enabled: true,
+                guiTimeoutMs: 100,
+                clickDelayMs: 0,
+                targetItems: ['coal'],
+                unpackItems: { coal: { aliases: ['custom coal action'] } }
+            }
+        }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const menu = { title: 'Menu', slots: Array(27), inventoryStart: 27 };
+    menu.slots[10] = { name: 'anvil', count: 1 };
+    const conversionWindow = { title: 'Convert', slots: Array(27), inventoryStart: 27 };
+    conversionWindow.slots[7] = { name: 'coal', count: 64, displayName: 'Coal' };
+    framework.ctx.getService('serverCommands').openMaterialConversionMenu = async () => {
+        bot.currentWindow = menu;
+        bot.emit('windowOpen', menu);
+        return Result.SUCCESS;
+    };
+    bot.clickWindow = async slot => {
+        bot.clickedSlots.push(slot);
+        if (slot === 10) {
+            bot.currentWindow = conversionWindow;
+            bot.emit('windowOpen', conversionWindow);
+        }
+        if (slot === 7) {
+            bot.currentWindow = null;
+            bot.emit('windowClose');
+        }
+    };
+
+    assert.equal(await framework.ctx.getService('materialConversion').run({
+        direction: 'unpack', targets: ['coal']
+    }), Result.SUCCESS);
+    assert.deepEqual(bot.clickedSlots, [10, 7]);
+    await framework.stop();
+});
+
+test('MaterialConversionService respects GUI ownership and releases its own lease', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {
+        storage: { conversion: { enabled: true, guiTimeoutMs: 100, clickDelayMs: 0, targetItems: ['coal'] } }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    framework.runtime.state.storage.gui.items = [{ slot: 10, itemName: 'coal', amount: 9 }];
+
+    const gui = framework.ctx.getService('gui');
+    const conversion = framework.ctx.getService('materialConversion');
+    assert.equal(gui.acquire('gui-probe'), Result.SUCCESS);
+    assert.equal(await conversion.run(), Result.BUSY);
+    assert.deepEqual(bot.chatMessages, []);
+    assert.equal(gui.owner(), 'gui-probe');
+    assert.equal(gui.release('gui-probe'), Result.SUCCESS);
+
+    const menu = { title: 'Menu', slots: Array(27), inventoryStart: 27 };
+    menu.slots[10] = { name: 'anvil', count: 1 };
+    const conversionWindow = { title: 'Convert', slots: Array(27), inventoryStart: 27 };
+    conversionWindow.slots[4] = { name: 'coal_block', count: 1 };
+    let expectedOwner = 'material-conversion';
+    bot.chat = command => {
+        bot.chatMessages.push(command);
+        assert.equal(gui.owner(), expectedOwner);
+        bot.currentWindow = menu;
+        bot.emit('windowOpen', menu);
+    };
+    bot.clickWindow = async slot => {
+        bot.clickedSlots.push(slot);
+        if (slot === 10) {
+            bot.currentWindow = conversionWindow;
+            bot.emit('windowOpen', conversionWindow);
+        }
+        if (slot === 4) {
+            bot.currentWindow = null;
+            bot.emit('windowClose');
+        }
+    };
+
+    assert.equal(await conversion.run(), Result.SUCCESS);
+    assert.equal(gui.owner(), null);
+
+    assert.equal(gui.acquire('crafting'), Result.SUCCESS);
+    expectedOwner = 'crafting';
+    assert.equal(await conversion.run({ guiOwner: 'crafting', targets: ['coal'] }), Result.SUCCESS);
+    assert.equal(gui.owner(), 'crafting');
+    assert.equal(gui.release('crafting'), Result.SUCCESS);
     await framework.stop();
 });
 
@@ -1086,6 +1602,173 @@ test('craft preparation only unpacks a block type whose direct B1 amount is shor
     assert.deepEqual(bot.chatMessages, ['/ks']);
     assert.deepEqual(bot.clickedSlots, [10, 4]);
     assert.deepEqual(framework.runtime.state.materialConversion.converted, ['coal']);
+    await framework.stop();
+});
+
+test('craft preparation can force the current recipe raw type through conversion without using kho quantities', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {
+        storage: { conversion: { enabled: true, guiTimeoutMs: 100, clickDelayMs: 0, targetItems: ['coal'] } }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    framework.runtime.state.storage.gui.items = [{ slot: 10, itemName: 'coal', amount: 64 }];
+    framework.runtime.state.storage.gui.detail.storage.free = 800000;
+
+    const menu = { title: 'Menu', slots: Array(27), inventoryStart: 27 };
+    menu.slots[10] = { name: 'anvil', count: 1 };
+    const conversionWindow = { title: 'Convert', slots: Array(27), inventoryStart: 27 };
+    conversionWindow.slots[4] = { name: 'coal', count: 1 };
+    bot.chat = command => {
+        bot.chatMessages.push(command);
+        if (command === '/ks') {
+            bot.currentWindow = menu;
+            bot.emit('windowOpen', menu);
+        }
+    };
+    bot.clickWindow = async slot => {
+        bot.clickedSlots.push(slot);
+        if (slot === 10) {
+            bot.currentWindow = conversionWindow;
+            bot.emit('windowOpen', conversionWindow);
+        }
+        if (slot === 4) {
+            bot.currentWindow = null;
+            bot.emit('windowClose');
+        }
+    };
+
+    const result = await framework.ctx.getService('storage').prepareRawForCraft(
+        [{ item: 'coal', amount: 16 }],
+        { coal: 10 },
+        { forceUnpack: true }
+    );
+    assert.equal(result, Result.SUCCESS);
+    assert.deepEqual(bot.chatMessages, ['/ks']);
+    assert.deepEqual(bot.clickedSlots, [10, 4]);
+    await framework.stop();
+});
+
+test('Crafting prepares the current B2 recipe through a fresh capacity snapshot before forced unpack', async () => {
+    const framework = new Framework(new FakeBot(), {
+        crafting: { personalVault: { enabled: false } },
+        storage: {
+            conversion: {
+                enabled: true,
+                targetItems: ['coal']
+            }
+        }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    // The raw /kho count is deliberately already sufficient. B2 preparation
+    // must still request the server's block-to-raw conversion for this recipe.
+    framework.runtime.state.storage.gui.items = [
+        { slot: 10, itemName: 'coal', amount: 64 },
+        { slot: 11, itemName: 'coal_block', amount: 2 }
+    ];
+
+    const storage = framework.ctx.getService('storage');
+    const calls = [];
+    storage.refreshStorageGui = async options => {
+        calls.push({ method: 'refreshStorageGui', options });
+        return Result.SUCCESS;
+    };
+    storage.reserveCapacityForUnpack = async (...args) => {
+        calls.push({ method: 'reserveCapacityForUnpack', args });
+        return Result.SUCCESS;
+    };
+    storage.prepareRawForCraft = async (...args) => {
+        calls.push({ method: 'prepareRawForCraft', args });
+        return Result.SUCCESS;
+    };
+
+    const crafting = framework.ctx.getService('crafting');
+    const settings = crafting.settings();
+    const action = { slot: 11, name: 'Than tinh luyện', count: 1 };
+    crafting.run = {
+        active: true,
+        settings,
+        plan: { actions: [action] },
+        actionIndex: 0,
+        actionProgress: 0,
+        preparedTier2ActionIndex: null,
+        status: 'CRAFTING'
+    };
+
+    assert.equal(await crafting._prepareCurrentTier2Action(action), Result.PENDING);
+    assert.deepEqual(calls, [
+        {
+            method: 'refreshStorageGui',
+            options: { runPostProcessing: false, requireFreeSpace: true, guiOwner: 'crafting' }
+        },
+        {
+            method: 'reserveCapacityForUnpack',
+            args: [
+                [{ item: 'coal', amount: 16 }],
+                settings.storageMaterialSlots,
+                { protectedItems: [{ item: 'coal', amount: 16 }], forceUnpack: true, guiOwner: 'crafting' }
+            ]
+        },
+        {
+            method: 'prepareRawForCraft',
+            args: [
+                [{ item: 'coal', amount: 16 }],
+                settings.storageMaterialSlots,
+                {
+                    capacityReserved: true,
+                    protectedItems: [{ item: 'coal', amount: 16 }],
+                    forceUnpack: true,
+                    guiOwner: 'crafting'
+                }
+            ]
+        },
+        {
+            method: 'refreshStorageGui',
+            options: { runPostProcessing: false, guiOwner: 'crafting' }
+        }
+    ]);
+    assert.equal(crafting.run.preparedTier2ActionIndex, 0);
+    assert.equal(crafting.run.status, 'OPENING_GUI');
+    assert.deepEqual(framework.runtime.state.crafting.currentB2Preparation, {
+        action: 'Than tinh luyện',
+        targets: ['coal']
+    });
+    await framework.stop();
+});
+
+test('Crafting stops before /ks when a successful block-conversion click does not produce enough raw material', async () => {
+    const framework = new Framework(new FakeBot(), {
+        crafting: { personalVault: { enabled: false } },
+        storage: { conversion: { enabled: true, targetItems: ['coal'] } }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    framework.runtime.state.storage.gui.items = [
+        { slot: 10, itemName: 'coal', amount: 0 },
+        { slot: 11, itemName: 'coal_block', amount: 2 }
+    ];
+
+    const storage = framework.ctx.getService('storage');
+    storage.refreshStorageGui = async () => Result.SUCCESS;
+    storage.reserveCapacityForUnpack = async () => Result.SUCCESS;
+    storage.prepareRawForCraft = async () => Result.SUCCESS;
+
+    const crafting = framework.ctx.getService('crafting');
+    const action = { slot: 11, name: 'Than tinh luyá»‡n', count: 1 };
+    crafting.run = {
+        active: true,
+        settings: crafting.settings(),
+        plan: { actions: [action] },
+        actionIndex: 0,
+        actionProgress: 0,
+        preparedTier2ActionIndex: null,
+        status: 'CRAFTING'
+    };
+
+    assert.equal(await crafting._prepareCurrentTier2Action(action), Result.INSUFFICIENT_ITEMS);
+    assert.equal(crafting.run.status, 'FAILED');
+    assert.match(crafting.run.error, /chưa tạo đủ phôi/);
     await framework.stop();
 });
 
@@ -1182,9 +1865,9 @@ test('Super Alloy withdraws existing refined items from /pv 2 and skips their re
         displayName: 'Amethyst Shard',
         components: [{ type: 'custom_name', data: '{"text":"Refined Component"}' }]
     };
-    const craftingMenu = { title: 'Craft menu', slots: Array(100), inventoryStart: 100 };
+    const craftingMenu = { title: 'Chế tạo', slots: Array(100), inventoryStart: 100 };
     craftingMenu.slots[16] = { name: 'crafting_table', count: 1, displayName: 'Recipes' };
-    const craftingWindow = { title: 'Recipes', slots: Array(100), inventoryStart: 100 };
+    const craftingWindow = { title: 'Danh sách công thức', slots: Array(100), inventoryStart: 100 };
     craftingWindow.slots[99] = { name: 'nether_star', count: 1, displayName: 'Test Alloy' };
     let withdrawn = false;
     let crafted = false;
@@ -1378,6 +2061,67 @@ test('personal vault stores a completed SHK from player inventory', async () => 
     assert.equal(framework.runtime.state.personalVault.status, 'PARTIAL');
     assert.equal(framework.runtime.state.personalVault.lastError, null);
     assert.deepEqual(framework.runtime.state.personalVault.lastDeposit.missing, [{ name: 'Titan', amount: 16 }]);
+    await framework.stop();
+});
+
+test('personal vault opens through ServerCommandService after registering its GUI listener', async () => {
+    const framework = new Framework(new FakeBot(), {
+        crafting: { personalVault: { guiTimeoutMs: 100, commandCooldownMs: 0 } }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const events = framework.ctx.getManager('events');
+    const chat = framework.ctx.getService('chat');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    const vaultWindow = { title: 'Personal Vault', slots: Array(27), inventoryStart: 27 };
+    const received = [];
+    let openingThroughServerCommands = false;
+    chat.sendCommand = async (command, options) => {
+        assert.equal(openingThroughServerCommands, true);
+        assert.equal(command, '/pv 2');
+        assert.equal(events.listenerCount(Events.GUI.OPEN) > 0, false);
+        received.push(options);
+        options.beforeSend();
+        assert.equal(events.listenerCount(Events.GUI.OPEN) > 0, true);
+        events.emit(Events.GUI.OPEN, vaultWindow);
+        return Result.SUCCESS;
+    };
+    serverCommands.openPersonalVault = async options => {
+        openingThroughServerCommands = true;
+        try {
+            assert.equal(framework.ctx.getService('gui').owner(), 'personal-vault');
+            return await chat.sendCommand('/pv 2', options);
+        } finally {
+            openingThroughServerCommands = false;
+        }
+    };
+
+    const vault = framework.ctx.getService('personalVault');
+    assert.equal(await vault.refresh(), Result.SUCCESS);
+    assert.equal(received.length, 1);
+    assert.equal(typeof received[0].beforeSend, 'function');
+    assert.equal(events.listenerCount(Events.GUI.OPEN), 0);
+    assert.equal(typeof vault.withdraw, 'function');
+    assert.equal(typeof vault.deposit, 'function');
+    assert.equal(framework.ctx.getService('gui').owner(), null);
+    await framework.stop();
+});
+
+test('personal vault preserves command-send failures from ServerCommandService', async () => {
+    const framework = new Framework(new FakeBot(), {
+        crafting: { personalVault: { commandCooldownMs: 0 } }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const chat = framework.ctx.getService('chat');
+    chat.sendCommand = async () => assert.fail('PersonalVaultService must not call ChatService directly');
+    framework.ctx.getService('serverCommands').openPersonalVault = async () => Result.NOT_CONNECTED;
+
+    const vault = framework.ctx.getService('personalVault');
+    assert.equal(await vault.refresh(), Result.FAILED);
+    assert.equal(framework.runtime.state.personalVault.status, 'FAILED');
     await framework.stop();
 });
 
@@ -2232,6 +2976,101 @@ test('fishing reaches the target before equipping the rod and defaults to sprint
     await framework.stop();
 });
 
+test('FishingService opens AFK through ServerCommandService after registering its GUI listener', async () => {
+    const framework = new Framework(new FakeBot(), {
+        fishing: { afkSlots: [11], afkMenuDelayMs: 0, guiTimeoutMs: 100 }
+    });
+    await framework.start();
+
+    const fishing = framework.ctx.getService('fishing');
+    const gui = framework.ctx.getService('gui');
+    const events = framework.ctx.getManager('events');
+    const chat = framework.ctx.getService('chat');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    chat.sendCommand = async () => assert.fail('FishingService must not call ChatService directly');
+    let receivedOptions;
+    serverCommands.openFishingAfk = async options => {
+        receivedOptions = options;
+        assert.equal(gui.owner(), 'fishing');
+        assert.equal(events.listenerCount(Events.GUI.OPEN), 0);
+        options.beforeSend();
+        assert.equal(events.listenerCount(Events.GUI.OPEN), 1);
+        const window = { title: 'AFK', slots: Array(27), inventoryStart: 27 };
+        window.slots[11] = { name: 'fishing_rod', count: 1 };
+        gui.sync(window);
+        events.emit(Events.GUI.OPEN, window);
+        return Result.SUCCESS;
+    };
+    fishing.waitForTeleport = async () => true;
+    fishing.prepareFishing = async () => Result.SUCCESS;
+    gui.click = async slot => {
+        assert.equal(slot, 11);
+        return Result.SUCCESS;
+    };
+
+    assert.equal(await fishing.start(), Result.SUCCESS);
+    assert.equal(typeof receivedOptions.beforeSend, 'function');
+    assert.equal(fishing.afkSlot, 11);
+    assert.equal(events.listenerCount(Events.GUI.OPEN), 0);
+    assert.equal(gui.owner(), null);
+    await framework.stop();
+});
+
+test('FishingService preserves ServerCommandService failures', async () => {
+    const framework = new Framework(new FakeBot(), {});
+    await framework.start();
+
+    const fishing = framework.ctx.getService('fishing');
+    const chat = framework.ctx.getService('chat');
+    chat.sendCommand = async () => assert.fail('FishingService must not call ChatService directly');
+    let calls = 0;
+    framework.ctx.getService('serverCommands').openFishingAfk = async options => {
+        calls += 1;
+        assert.equal(typeof options.beforeSend, 'function');
+        return Result.NOT_CONNECTED;
+    };
+
+    assert.equal(await fishing.start(), Result.FAILED);
+    assert.equal(calls, 1);
+    assert.equal(framework.runtime.state.fishing.running, false);
+    assert.equal(framework.runtime.state.fishing.state, 'IDLE');
+    await framework.stop();
+});
+
+test('independent GUI workflows do not send commands while another workflow owns the GUI', async () => {
+    const framework = new Framework(new FakeBot(), {
+        storage: { smelting: { enabled: true, passes: 1 } },
+        crafting: { personalVault: { commandCooldownMs: 0 } }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    framework.runtime.state.storage.gui.items = [{ itemName: 'raw_gold', amount: 1 }];
+
+    const gui = framework.ctx.getService('gui');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    let sends = 0;
+    for (const name of ['openFishingAfk', 'openSkyBlockSelector', 'openDungeon', 'openSmeltingMenu', 'openPersonalVault']) {
+        serverCommands[name] = async () => {
+            sends += 1;
+            return Result.SUCCESS;
+        };
+    }
+
+    const dungeon = framework.ctx.getService('dungeon');
+    await dungeon.start();
+    dungeon.autoFarmActive = true;
+    assert.equal(gui.acquire('gui-probe'), Result.SUCCESS);
+    assert.equal(await framework.ctx.getService('fishing').start(), Result.BUSY);
+    assert.equal(await framework.ctx.getService('skyblock').startJoin('test'), Result.BUSY);
+    assert.equal(await dungeon.enter(), Result.BUSY);
+    assert.equal(await framework.ctx.getService('smelting').run(), Result.BUSY);
+    assert.equal(await framework.ctx.getService('personalVault').refresh(), Result.BUSY);
+    assert.equal(sends, 0);
+    assert.equal(gui.owner(), 'gui-probe');
+    assert.equal(gui.release('gui-probe'), Result.SUCCESS);
+    await framework.stop();
+});
+
 test('storage title parser records capacity bars from the real NBT shape', async () => {
     const bot = new FakeBot();
     const framework = new Framework(bot, {});
@@ -2463,7 +3302,11 @@ test('storage re-packs B1 and sells non-protected ores before the capacity buffe
 test('storage sells each configured ore through its service API', async () => {
     const bot = new FakeBot();
     const framework = new Framework(bot, {
-        storage: { selectedOres: ['DIAMOND', 'IRON_BLOCK'], sellCommandDelayMs: 0 }
+        storage: {
+            selectedOres: ['DIAMOND', 'IRON_BLOCK'],
+            sellCommandDelayMs: 0,
+            conversion: { targetItems: ['diamond', 'iron_block'] }
+        }
     });
     await framework.start();
     framework.runtime.state.bot.connected = true;
@@ -2471,6 +3314,85 @@ test('storage sells each configured ore through its service API', async () => {
     const storage = framework.ctx.getService('storage');
     assert.equal(await storage.sellStorage(), Result.SUCCESS);
     assert.deepEqual(bot.chatMessages, ['/kho sell DIAMOND', '/kho sell IRON_BLOCK']);
+    await framework.stop();
+});
+
+test('StorageService opens and sells through ServerCommandService without direct chat commands', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {
+        storage: {
+            guiTimeoutMs: 100,
+            guiRetryAttempts: 0,
+            sellCommandDelayMs: 0,
+            selectedOres: ['diamond', 'diamond\nore']
+        }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const storage = framework.ctx.getService('storage');
+    const events = framework.ctx.getManager('events');
+    const chat = framework.ctx.getService('chat');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    const storageWindow = { title: 'Kho chứa', slots: Array(54), inventoryStart: 54 };
+    const calls = [];
+    chat.sendCommand = async () => assert.fail('StorageService must not call ChatService directly');
+    serverCommands.openStorage = async options => {
+        calls.push(['open', options]);
+        assert.equal(events.listenerCount(Events.Storage.SNAPSHOT) > 0, false);
+        options.beforeSend();
+        assert.equal(events.listenerCount(Events.Storage.SNAPSHOT) > 0, true);
+        bot.emit('windowOpen', storageWindow);
+        return Result.SUCCESS;
+    };
+    serverCommands.sellStorage = async (ore, options) => {
+        calls.push(['sell', ore, options]);
+        return Result.SUCCESS;
+    };
+
+    assert.equal(await storage.refreshStorageGui({ runPostProcessing: false }), Result.SUCCESS);
+    assert.equal(await storage.sellStorage(), Result.SUCCESS);
+    assert.equal(typeof calls[0][1].beforeSend, 'function');
+    assert.deepEqual(calls.slice(1), [['sell', 'DIAMOND', undefined]]);
+    assert.equal(events.listenerCount(Events.Storage.SNAPSHOT), 0);
+    await framework.stop();
+});
+
+test('StorageService respects GUI ownership and preserves a Crafting lease', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, { storage: { guiTimeoutMs: 100, guiRetryAttempts: 0 } });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const gui = framework.ctx.getService('gui');
+    const storage = framework.ctx.getService('storage');
+    assert.equal(gui.acquire('gui-probe'), Result.SUCCESS);
+    assert.equal(await storage.refreshStorageGui({ runPostProcessing: false }), Result.BUSY);
+    assert.deepEqual(bot.chatMessages, []);
+    assert.equal(gui.owner(), 'gui-probe');
+    assert.equal(gui.release('gui-probe'), Result.SUCCESS);
+
+    const storageWindow = { title: 'Kho chua', slots: Array(54), inventoryStart: 54 };
+    let expectedOwner = 'storage';
+    framework.ctx.getService('serverCommands').openStorage = async options => {
+        assert.equal(gui.owner(), expectedOwner);
+        options.beforeSend();
+        bot.currentWindow = storageWindow;
+        bot.emit('windowOpen', storageWindow);
+        return Result.SUCCESS;
+    };
+
+    assert.equal(await storage.refreshStorageGui({ runPostProcessing: false }), Result.SUCCESS);
+    assert.equal(gui.owner(), null);
+
+    assert.equal(gui.acquire('crafting'), Result.SUCCESS);
+    expectedOwner = 'crafting';
+    assert.equal(await storage.refreshStorageGui({
+        runPostProcessing: false,
+        guiOwner: 'crafting'
+    }), Result.SUCCESS);
+    assert.equal(gui.owner(), 'crafting');
+    assert.equal(gui.release('crafting'), Result.SUCCESS);
     await framework.stop();
 });
 
@@ -2527,6 +3449,31 @@ test('each successful /kho refresh runs raw smelting through /ks slot 12', async
         { slot: 1, mouseButton: 0, mode: 0 }
     ]);
     assert.equal(framework.runtime.state.smelting.status, 'READY');
+    await framework.stop();
+});
+
+test('SmeltingService opens its fixed menu through ServerCommandService', async () => {
+    const framework = new Framework(new FakeBot(), {
+        storage: { smelting: { enabled: true, passes: 1 } }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    framework.runtime.state.storage.gui.items = [{ itemName: 'raw_gold', amount: 1 }];
+
+    const chat = framework.ctx.getService('chat');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    chat.sendCommand = async () => assert.fail('SmeltingService must not call ChatService directly');
+    let calls = 0;
+    serverCommands.openSmeltingMenu = async options => {
+        calls += 1;
+        assert.equal(framework.ctx.getService('gui').owner(), 'smelting');
+        assert.equal(options, undefined);
+        return Result.NOT_CONNECTED;
+    };
+
+    assert.equal(await framework.ctx.getService('smelting').run(), Result.NOT_CONNECTED);
+    assert.equal(calls, 1);
+    assert.equal(framework.ctx.getService('gui').owner(), null);
     await framework.stop();
 });
 
@@ -2734,6 +3681,45 @@ test('storage probe waits for a new kho GUI instead of using a stale window', as
     await framework.stop();
 });
 
+test('storage capacity refresh waits for a fresh kho snapshot with free space', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, { storage: { guiTimeoutMs: 100, guiRetryAttempts: 0 } });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const slots = Array(54);
+    const storageWindow = { title: 'Kho chua', slots, inventoryStart: 54 };
+    const serverCommands = framework.ctx.getService('serverCommands');
+    serverCommands.openStorage = async options => {
+        options.beforeSend();
+        bot.currentWindow = storageWindow;
+        bot.emit('windowOpen', storageWindow);
+        setTimeout(() => {
+            slots[49] = {
+                name: 'player_head',
+                components: [{
+                    type: 'lore',
+                    data: [
+                        '{"text":"Dung luong: 800,000"}',
+                        '{"text":"Da su dung: 453,724 / 56.72%"}',
+                        '{"text":"Con trong: 346,276 / 43.28%"}'
+                    ]
+                }]
+            };
+            bot.emit('windowUpdate', 49, null, slots[49]);
+        }, 5);
+        return Result.SUCCESS;
+    };
+
+    const result = await framework.ctx.getService('storage').refreshStorageGui({
+        runPostProcessing: false,
+        requireFreeSpace: true
+    });
+    assert.equal(result, Result.SUCCESS);
+    assert.equal(framework.runtime.state.storage.gui.detail.storage.free, 346276);
+    await framework.stop();
+});
+
 test('storage probe exposes server feedback when /kho does not open a GUI', async () => {
     const bot = new FakeBot();
     const framework = new Framework(bot, { storage: { guiTimeoutMs: 30 } });
@@ -2817,22 +3803,62 @@ test('SkyBlock workflow reports each GUI step and waits for confirmation', async
     framework.runtime.state.skyblock.loggedIn = true;
 
     const skyblock = framework.ctx.getService('skyblock');
+    const chat = framework.ctx.getService('chat');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    const calls = [];
+    chat.sendCommand = async () => assert.fail('SkyBlockService must not call ChatService directly');
+    serverCommands.openSkyBlockSelector = async options => {
+        calls.push(['selector', options]);
+        assert.equal(framework.ctx.getService('gui').owner(), 'skyblock');
+        options.beforeSend();
+        return Result.SUCCESS;
+    };
+    serverCommands.goIsland = async options => {
+        calls.push(['island', options]);
+        return Result.SUCCESS;
+    };
     assert.equal(await skyblock.startJoin('test'), Result.PENDING);
-    await waitFor(() => bot.chatMessages.includes('/skyblock'));
+    await waitFor(() => calls.some(([name]) => name === 'selector'));
 
-    const firstWindow = { title: 'SkyBlock', slots: [] };
+    const firstWindow = { title: 'SkyBlock', slots: Object.assign(Array(27), { 12: { name: 'paper', count: 1 } }) };
     bot.emit('windowOpen', firstWindow);
     await waitFor(() => bot.clickedSlots.includes(12));
 
-    const secondWindow = { title: 'Choose island', slots: [] };
+    const secondWindow = { title: 'Choose island', slots: Object.assign(Array(27), { 19: { name: 'player_head', count: 1 } }) };
     bot.emit('windowOpen', secondWindow);
     await waitFor(() => bot.clickedSlots.includes(19));
 
     bot.emit('message', { toString: () => 'Welcome to SkyBlock' });
     await waitFor(() => framework.runtime.state.skyblock.joined);
+    await waitFor(() => calls.some(([name]) => name === 'island'));
 
     assert.equal(skyblock.status().step, 'VERIFY_SKYBLOCK');
     assert.equal(skyblock.status().status, 'complete');
+    assert.equal(calls[0][0], 'selector');
+    assert.equal(typeof calls[0][1]?.beforeSend, 'function');
+    assert.deepEqual(calls[1], ['island', undefined]);
+    assert.deepEqual(bot.chatMessages, []);
+    await waitFor(() => framework.ctx.getService('gui').owner() === null);
+    await framework.stop();
+});
+
+test('SkyBlockService join delegates the selector command to ServerCommandService', async () => {
+    const framework = new Framework(new FakeBot(), {});
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const chat = framework.ctx.getService('chat');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    chat.sendCommand = async () => assert.fail('SkyBlockService must not call ChatService directly');
+    let calls = 0;
+    serverCommands.openSkyBlockSelector = async options => {
+        calls += 1;
+        assert.equal(options, undefined);
+        return Result.PENDING;
+    };
+
+    assert.equal(await framework.ctx.getService('skyblock').join(), Result.PENDING);
+    assert.equal(calls, 1);
     await framework.stop();
 });
 
@@ -2848,9 +3874,9 @@ test('SkyBlock workflow confirms a server teleport without relying on chat text'
 
     await skyblock.startJoin('test');
     await waitFor(() => bot.chatMessages.includes('/skyblock'));
-    bot.emit('windowOpen', { title: 'SkyBlock', slots: [] });
+    bot.emit('windowOpen', { title: 'SkyBlock', slots: Object.assign(Array(27), { 12: { name: 'paper', count: 1 } }) });
     await waitFor(() => bot.clickedSlots.includes(12));
-    bot.emit('windowOpen', { title: 'Island', slots: [] });
+    bot.emit('windowOpen', { title: 'Island', slots: Object.assign(Array(27), { 19: { name: 'player_head', count: 1 } }) });
     await waitFor(() => bot.clickedSlots.includes(19));
     bot.emit('forcedMove');
     await waitFor(() => framework.runtime.state.skyblock.joined);
@@ -2886,7 +3912,7 @@ test('SkyBlock retries the GUI flow without sending /login again', async () => {
         }
         if (message === '/skyblock') {
             skyblockAttempts += 1;
-            const menu = { title: `SkyBlock ${skyblockAttempts}`, slots: [] };
+            const menu = { title: `SkyBlock ${skyblockAttempts}`, slots: Object.assign(Array(27), { 12: { name: 'paper', count: 1 } }) };
             bot.currentWindow = menu;
             bot.emit('windowOpen', menu);
         }
@@ -2895,7 +3921,7 @@ test('SkyBlock retries the GUI flow without sending /login again', async () => {
         bot.clickedSlots.push(slot);
         bot.clickedActions.push({ slot, mouseButton, mode });
         if (slot === 12) {
-            const island = { title: `Island ${skyblockAttempts}`, slots: [] };
+            const island = { title: `Island ${skyblockAttempts}`, slots: Object.assign(Array(27), { 19: { name: 'player_head', count: 1 } }) };
             bot.currentWindow = island;
             bot.emit('windowOpen', island);
         }
@@ -2914,6 +3940,95 @@ test('SkyBlock retries the GUI flow without sending /login again', async () => {
     assert.equal(bot.chatMessages.filter(message => message.startsWith('/login ')).length, 1);
     assert.equal(bot.chatMessages.filter(message => message === '/skyblock').length, 2);
     assert.equal(skyblock.status().status, 'complete');
+    await framework.stop();
+});
+
+test('Minecraft login lifecycle uses minecraft config before legacy SkyBlock config', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {
+        minecraft: {
+            loginPassword: 'connection-password',
+            loginAfterSpawnDelayMs: 0,
+            loginAfterLoginDelayMs: 0,
+            loginTimeoutMs: 100
+        },
+        skyblock: { loginPassword: 'legacy-password' }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    bot.chat = message => {
+        bot.chatMessages.push(message);
+        if (message.startsWith('/login ')) queueMicrotask(() => bot.emit('message', { toString: () => 'logged in' }));
+    };
+    bot.emit('login');
+    bot.emit('spawn');
+
+    await waitFor(() => framework.runtime.state.connection.authenticated === true);
+    assert.deepEqual(bot.chatMessages.filter(message => message.startsWith('/login ')), ['/login connection-password']);
+    assert.equal(framework.runtime.state.skyblock.loggedIn, true);
+    await framework.stop();
+});
+
+test('Minecraft login lifecycle accepts a configured confirmation from messagestr', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {
+        minecraft: {
+            loginPassword: 'connection-password',
+            loginAfterSpawnDelayMs: 0,
+            loginAfterLoginDelayMs: 0,
+            loginTimeoutMs: 100
+        }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    bot.chat = message => {
+        bot.chatMessages.push(message);
+        if (message.startsWith('/login ')) queueMicrotask(() => bot.emit('messagestr', 'logged in'));
+    };
+    bot.emit('login');
+    bot.emit('spawn');
+
+    await waitFor(() => framework.runtime.state.connection.authenticated === true);
+    assert.deepEqual(bot.chatMessages.filter(message => message.startsWith('/login ')), ['/login connection-password']);
+    await framework.stop();
+});
+
+test('Minecraft login sends once without treating an absent server receipt as a failure', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, {
+        minecraft: {
+            loginPassword: 'connection-password',
+            loginAfterSpawnDelayMs: 0,
+            loginAfterLoginDelayMs: 0
+        }
+    });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    const login = framework.ctx.getService('minecraftLogin');
+
+    assert.equal(await login.start(), Result.SUCCESS);
+    assert.deepEqual(bot.chatMessages.filter(message => message.startsWith('/login ')), ['/login connection-password']);
+    assert.equal(framework.runtime.state.connection.authenticated, false);
+    await framework.stop();
+});
+
+test('SkyBlock join does not wait for a login chat receipt', async () => {
+    const bot = new FakeBot();
+    const framework = new Framework(bot, { skyblock: { guiTimeoutMs: 100 } });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    const skyblock = framework.ctx.getService('skyblock');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    let called = false;
+    serverCommands.openSkyBlockSelector = async options => {
+        called = true;
+        options.beforeSend();
+        return Result.NOT_CONNECTED;
+    };
+
+    assert.equal(await skyblock.startJoin('test'), Result.PENDING);
+    await waitFor(() => called);
     await framework.stop();
 });
 
@@ -3023,13 +4138,26 @@ test('dungeon mode enables AutoFarm before entering through /d', async () => {
     framework.runtime.state.skyblock.loggedIn = true;
     framework.runtime.state.skyblock.joined = true;
 
+    const chat = framework.ctx.getService('chat');
+    const serverCommands = framework.ctx.getService('serverCommands');
+    const commands = [];
+    chat.sendCommand = async () => assert.fail('DungeonService must not call ChatService directly');
+    serverCommands.openAutofarm = async options => {
+        commands.push(['autofarm', options]);
+        assert.equal(framework.ctx.getService('gui').owner(), 'dungeon');
+        return Result.SUCCESS;
+    };
+    serverCommands.openDungeon = async options => {
+        commands.push(['dungeon', options]);
+        return Result.SUCCESS;
+    };
     const starting = framework.ctx.getManager('mode').start('dungeon');
-    await waitFor(() => bot.chatMessages.includes('/autofarm'));
+    await waitFor(() => commands.some(([name]) => name === 'autofarm'));
     const autofarmSlots = Array(54);
     autofarmSlots[21] = { type: 1, id: 1, name: 'stone' };
     bot.emit('windowOpen', { title: 'AutoFarm', slots: autofarmSlots });
     await waitFor(() => bot.clickedSlots.includes(21));
-    await waitFor(() => bot.chatMessages.includes('/d'));
+    await waitFor(() => commands.some(([name]) => name === 'dungeon'));
     const dungeonSlots = Array(54);
     dungeonSlots[12] = { type: 1, id: 1, name: 'stone' };
     bot.emit('windowOpen', { title: 'Dungeon', slots: dungeonSlots });
@@ -3038,6 +4166,53 @@ test('dungeon mode enables AutoFarm before entering through /d', async () => {
     assert.equal(await starting, Result.SUCCESS);
     assert.ok(bot.clickedSlots.includes(12));
     assert.ok(bot.clickedSlots.includes(21));
+    assert.deepEqual(commands, [['autofarm', undefined], ['dungeon', undefined]]);
+    assert.deepEqual(bot.chatMessages, []);
     assert.equal(framework.runtime.state.dungeon.state, 'RUNNING');
+    assert.equal(framework.ctx.getService('gui').owner(), null);
+    await framework.stop();
+});
+
+test('DungeonService preserves ServerCommandService failures', async () => {
+    const framework = new Framework(new FakeBot(), { dungeon: { teleportDelayMs: 0 } });
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+    framework.runtime.state.skyblock.joined = true;
+
+    const dungeon = framework.ctx.getService('dungeon');
+    const chat = framework.ctx.getService('chat');
+    chat.sendCommand = async () => assert.fail('DungeonService must not call ChatService directly');
+    await dungeon.start();
+    dungeon.autoFarmActive = true;
+    let calls = 0;
+    framework.ctx.getService('serverCommands').openDungeon = async options => {
+        calls += 1;
+        assert.equal(options, undefined);
+        return Result.NOT_CONNECTED;
+    };
+
+    assert.equal(await dungeon.enter(), Result.FAILED);
+    assert.equal(calls, 1);
+    assert.equal(framework.runtime.state.dungeon.state, 'IDLE');
+    await framework.stop();
+});
+
+test('DungeonService stores inventory through ServerCommandService and releases its GUI owner on failure', async () => {
+    const framework = new Framework(new FakeBot(), {});
+    await framework.start();
+    framework.runtime.state.bot.connected = true;
+
+    const chat = framework.ctx.getService('chat');
+    chat.sendCommand = async () => assert.fail('DungeonService must not call ChatService directly');
+    let calls = 0;
+    framework.ctx.getService('serverCommands').openDungeonStorage = async () => {
+        calls += 1;
+        assert.equal(framework.ctx.getService('gui').owner(), 'dungeon-store');
+        return Result.NOT_CONNECTED;
+    };
+
+    assert.equal(await framework.ctx.getService('dungeon').storeInventory(), Result.FAILED);
+    assert.equal(calls, 1);
+    assert.equal(framework.ctx.getService('gui').owner(), null);
     await framework.stop();
 });
